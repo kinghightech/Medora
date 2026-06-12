@@ -11,7 +11,8 @@ import SwiftUI
 struct MedoraApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .preferredColorScheme(.light)
         }
     }
 }
