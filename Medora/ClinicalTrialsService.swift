@@ -87,7 +87,7 @@ enum ClinicalTrialsError: LocalizedError {
 struct ClinicalTrialsService {
 
     func getPlacesAutocompleteSuggestions(for text: String) async -> [GeocodeSuggestion] {
-        let apiKey = "pk.eyJ1Ijoia2luZ2hpZ2h0ZWNoIiwiYSI6ImNtcGhmYjY2cTA0aTIyc3EwN2hoODNhZnIifQ.mi2MdoEdOqeRmBJMH99qbg"
+        let apiKey = Config.mapboxAPIKey
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return []
@@ -161,7 +161,7 @@ struct ClinicalTrialsService {
     // MARK: Geocoding (Mapbox Geocoding API)
 
     func geocode(_ text: String) async throws -> CLLocationCoordinate2D {
-        let apiKey = "pk.eyJ1Ijoia2luZ2hpZ2h0ZWNoIiwiYSI6ImNtcGhmYjY2cTA0aTIyc3EwN2hoODNhZnIifQ.mi2MdoEdOqeRmBJMH99qbg"
+        let apiKey = Config.mapboxAPIKey
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             throw ClinicalTrialsError.locationNotFound
