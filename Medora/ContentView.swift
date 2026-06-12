@@ -5,6 +5,17 @@
 
 import SwiftUI
 
+fileprivate enum OnboardingField: Hashable {
+    case firstName
+    case lastName
+    case age
+    case email
+    case password
+    case confirmPassword
+    case cpName
+    case cpEmail
+}
+
 struct ContentView: View {
     private enum OnboardingStep {
         case welcome               // Screen 1: Welcome to Medora
@@ -16,17 +27,6 @@ struct ContentView: View {
         case reminders             // Screen 8: Would you like medication reminders?
         case carePartner           // Screen 9: Add a care partner (optional)
         case completed             // Screen 10: You're all set
-    }
-
-    private enum OnboardingField: Hashable {
-        case firstName
-        case lastName
-        case age
-        case email
-        case password
-        case confirmPassword
-        case cpName
-        case cpEmail
     }
 
     @ObservedObject var healthStore: HealthStore
@@ -148,25 +148,32 @@ struct ContentView: View {
     // MARK: - Body
     var body: some View {
         ZStack {
-            // Full-bleed premium background image
+            // Full-bleed background image
             Image("onboardingbackground")
                 .resizable()
                 .scaledToFill()
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    focusedField = nil
+                }
 
             // Soft overlay to maintain readability
             Color.white.opacity(0.12)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    focusedField = nil
+                }
 
             VStack(spacing: 0) {
-                // Header (Back button and Progress Indicator)
+                // Fixed Header Bar (placed outside ScrollView so it never scrolls)
                 headerBar
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
+                    .padding(.bottom, 8)
 
-                Spacer()
-
-                // Main Content container (no white card, fully integrated with background)
+                // Scrollable content area in the middle
                 ScrollView {
                     VStack(spacing: 32) {
                         switch step {
@@ -209,11 +216,14 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal, 24)
-                    .padding(.top, 16)
-                    .padding(.bottom, 24)
+                    .padding(.vertical, 16)
                 }
+                .scrollDismissesKeyboard(.immediately) // dismisses keyboard when scrolling
 
-                Spacer()
+                // Pinned buttons at the bottom of the screen (resizes cleanly above keyboard)
+                bottomButtons
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
             }
         }
         .preferredColorScheme(.light)
@@ -254,18 +264,16 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.medoraBlue)
                         .frame(width: geo.size.width * progressFraction, height: 6)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: progressFraction)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: progressFraction)
                 }
-                .padding(.top, 19)
+                .frame(height: 6)
+                .padding(.vertical, 19)
             }
-            .frame(height: 44)
-
-            Spacer()
-                .frame(width: 44, height: 44)
         }
+        .frame(height: 44)
     }
 
-    // MARK: - Screen 1: Welcome
+    // MARK: - Screen 1: Welcome to Medora
     private var welcomeScreen: some View {
         VStack(spacing: 28) {
             Image("MedoraLogo")
@@ -293,16 +301,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-
-            Button {
-                advanceStep(to: .name)
-            } label: {
-                Text("Get Started")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .padding(.top, 10)
         }
     }
 
@@ -322,26 +320,19 @@ struct ContentView: View {
             }
 
             VStack(spacing: 14) {
-                glassTextField("First Name", text: $firstName, field: .firstName)
+                TextField("First Name", text: $firstName)
+                    .focused($focusedField, equals: .firstName)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .lastName }
+                    .glassStyle(isFocused: focusedField == .firstName)
 
-                glassTextField("Last Name", text: $lastName, field: .lastName)
+                TextField("Last Name", text: $lastName)
+                    .focused($focusedField, equals: .lastName)
                     .submitLabel(.done)
                     .onSubmit { focusedField = nil }
+                    .glassStyle(isFocused: focusedField == .lastName)
             }
             .padding(.horizontal, 4)
-
-            Button {
-                advanceStep(to: .age)
-            } label: {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(!isNameValid)
-            .opacity(isNameValid ? 1 : 0.55)
         }
     }
 
@@ -360,26 +351,17 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
             }
 
-            glassTextField("Age", text: $ageString, field: .age)
+            TextField("Age", text: $ageString)
+                .focused($focusedField, equals: .age)
                 .keyboardType(.numberPad)
                 .submitLabel(.done)
                 .onSubmit { focusedField = nil }
+                .glassStyle(isFocused: focusedField == .age)
                 .padding(.horizontal, 4)
-
-            Button {
-                advanceStep(to: .managing)
-            } label: {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(!isAgeValid)
-            .opacity(isAgeValid ? 1 : 0.55)
         }
     }
 
-    // MARK: - Screen 4: What are you managing?
+    // MARK: - Screen 4: What are you currently managing?
     private var managingScreen: some View {
         VStack(spacing: 24) {
             VStack(spacing: 8) {
@@ -397,34 +379,34 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 ForEach(availableConditions, id: \.self) { condition in
                     let isSelected = selectedConditions.contains(condition)
-                    Button {
+                    HStack {
+                        Text(condition)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                        Spacer()
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6))
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        HapticManager.shared.triggerSelection()
                         if isSelected {
                             selectedConditions.remove(condition)
                         } else {
                             selectedConditions.insert(condition)
                         }
-                    } label: {
-                        HStack {
-                            Text(condition)
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(Color.primary)
-                            Spacer()
-                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6))
-                        }
-                        .padding(.horizontal, 16)
-                        .frame(height: 52)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
-                        )
                     }
-                    .buttonStyle(.plain)
                 }
             }
 
@@ -433,20 +415,10 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.top, 4)
-
-            Button {
-                advanceStep(to: .healthPermission)
-            } label: {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .padding(.top, 8)
         }
     }
 
-    // MARK: - Screen 6: Connect Apple Health
+    // MARK: - Screen 6: Connect your Apple Health data
     private var healthPermissionScreen: some View {
         VStack(spacing: 28) {
             Image(systemName: "heart.text.square.fill")
@@ -488,36 +460,10 @@ struct ContentView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-
-            VStack(spacing: 10) {
-                Button(action: requestHealthAccess) {
-                    HStack(spacing: 10) {
-                        if healthStore.isLoading {
-                            ProgressView()
-                                .tint(.white)
-                        }
-                        Text(healthStore.isLoading ? "Connecting" : "Connect Apple Health")
-                            .font(.system(size: 17, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(healthStore.isLoading)
-
-                Button {
-                    advanceStep(to: .account)
-                } label: {
-                    Text("Maybe Later")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.medoraDeepBlue)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(SecondaryButtonStyle())
-            }
         }
     }
 
-    // MARK: - Screen 7: Where should we save progress?
+    // MARK: - Screen 7: Where should we save your progress?
     private var accountScreen: some View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
@@ -533,20 +479,26 @@ struct ContentView: View {
             }
 
             VStack(spacing: 14) {
-                glassTextField("Email Address", text: $email, field: .email)
+                TextField("Email Address", text: $email)
+                    .focused($focusedField, equals: .email)
                     .keyboardType(.emailAddress)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .password }
+                    .glassStyle(isFocused: focusedField == .email)
 
-                glassSecureField("Password", text: $password, field: .password)
+                SecureField("Password", text: $password)
+                    .focused($focusedField, equals: .password)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .confirmPassword }
+                    .glassStyle(isFocused: focusedField == .password)
 
-                glassSecureField("Confirm Password", text: $confirmPassword, field: .confirmPassword)
+                SecureField("Confirm Password", text: $confirmPassword)
+                    .focused($focusedField, equals: .confirmPassword)
                     .submitLabel(.done)
                     .onSubmit { focusedField = nil }
+                    .glassStyle(isFocused: focusedField == .confirmPassword)
             }
             .padding(.horizontal, 4)
 
@@ -555,21 +507,10 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
-
-            Button {
-                advanceStep(to: .reminders)
-            } label: {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(!isAccountValid)
-            .opacity(isAccountValid ? 1 : 0.55)
         }
     }
 
-    // MARK: - Screen 8: Medication Reminders
+    // MARK: - Screen 8: Would you like medication reminders?
     private var remindersScreen: some View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
@@ -588,54 +529,43 @@ struct ContentView: View {
                 reminderOptionRow(title: "Yes, remind me", selection: true)
                 reminderOptionRow(title: "Not right now", selection: false)
             }
-
-            Button {
-                advanceStep(to: .carePartner)
-            } label: {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(wantsReminders == nil)
-            .opacity(wantsReminders == nil ? 0.55 : 1)
         }
     }
 
     private func reminderOptionRow(title: String, selection: Bool) -> some View {
         let isSelected = wantsReminders == selection
-        return Button {
-            wantsReminders = selection
-        } label: {
-            HStack {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                Spacer()
-                Circle()
-                    .stroke(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6), lineWidth: 2)
-                    .frame(width: 22, height: 22)
-                    .overlay(
-                        Circle()
-                            .fill(isSelected ? Color.medoraBlue : Color.clear)
-                            .padding(4)
-                    )
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
-            )
+        return HStack {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.primary)
+            Spacer()
+            Circle()
+                .stroke(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6), lineWidth: 2)
+                .frame(width: 22, height: 22)
+                .overlay(
+                    Circle()
+                        .fill(isSelected ? Color.medoraBlue : Color.clear)
+                        .padding(4)
+                )
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 18)
+        .frame(height: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            HapticManager.shared.triggerSelection()
+            wantsReminders = selection
+        }
     }
 
-    // MARK: - Screen 9: Add a Care Partner
+    // MARK: - Screen 9: Add a care partner (optional)
     private var carePartnerScreen: some View {
         VStack(spacing: 28) {
             VStack(spacing: 8) {
@@ -651,16 +581,20 @@ struct ContentView: View {
             }
 
             VStack(spacing: 14) {
-                glassTextField("Partner Name", text: $cpName, field: .cpName)
+                TextField("Partner Name", text: $cpName)
+                    .focused($focusedField, equals: .cpName)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .cpEmail }
+                    .glassStyle(isFocused: focusedField == .cpName)
 
-                glassTextField("Partner Email Address", text: $cpEmail, field: .cpEmail)
+                TextField("Partner Email Address", text: $cpEmail)
+                    .focused($focusedField, equals: .cpEmail)
                     .keyboardType(.emailAddress)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.done)
                     .onSubmit { focusedField = nil }
+                    .glassStyle(isFocused: focusedField == .cpEmail)
 
                 // Relationship selection picker
                 VStack(alignment: .leading, spacing: 8) {
@@ -672,56 +606,30 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         ForEach(relationships, id: \.self) { relationship in
                             let isSelected = cpRelationship == relationship
-                            Button {
-                                cpRelationship = relationship
-                            } label: {
-                                Text(relationship)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(isSelected ? .white : Color.primary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(isSelected ? Color.medoraBlue : Color.white.opacity(0.45))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(isSelected ? Color.clear : Color.white.opacity(0.8), lineWidth: 1)
-                                    )
-                            }
-                            .buttonStyle(.plain)
+                            Text(relationship)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(isSelected ? .white : Color.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(isSelected ? Color.medoraBlue : Color.white.opacity(0.45))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(isSelected ? Color.clear : Color.white.opacity(0.8), lineWidth: 1)
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    HapticManager.shared.triggerSelection()
+                                    cpRelationship = relationship
+                                }
                         }
                     }
                 }
                 .padding(.top, 4)
             }
             .padding(.horizontal, 4)
-
-            VStack(spacing: 10) {
-                Button {
-                    advanceStep(to: .completed)
-                } label: {
-                    Text("Add Care Partner")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(!isCarePartnerValid || cpName.isEmpty)
-                .opacity((isCarePartnerValid && !cpName.isEmpty) ? 1 : 0.55)
-
-                Button {
-                    // Reset care partner fields
-                    cpName = ""
-                    cpEmail = ""
-                    advanceStep(to: .completed)
-                } label: {
-                    Text("Skip")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.medoraDeepBlue)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(SecondaryButtonStyle())
-            }
         }
     }
 
@@ -758,63 +666,154 @@ struct ContentView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 10)
             }
-
-            Button(action: submitRegistrationAndComplete) {
-                HStack(spacing: 10) {
-                    if isSubmitting {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(isSubmitting ? "Creating account..." : "Scan Document")
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(isSubmitting)
         }
     }
 
-    // MARK: - Reusable UI Components
-    private func glassTextField(_ placeholder: String, text: Binding<String>, field: OnboardingField) -> some View {
-        let isFocused = focusedField == field
-        return TextField(placeholder, text: text)
-            .focused($focusedField, equals: field)
-            .font(.system(size: 16, weight: .medium))
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.55))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isFocused ? Color.medoraBlue : Color.white.opacity(0.85), lineWidth: 1.5)
-            )
-            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
-    }
+    // MARK: - Pinned Bottom Button Bar
+    @ViewBuilder
+    private var bottomButtons: some View {
+        VStack(spacing: 10) {
+            switch step {
+            case .welcome:
+                Button {
+                    advanceStep(to: .name)
+                } label: {
+                    Text("Get Started")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
 
-    private func glassSecureField(_ placeholder: String, text: Binding<String>, field: OnboardingField) -> some View {
-        let isFocused = focusedField == field
-        return SecureField(placeholder, text: text)
-            .focused($focusedField, equals: field)
-            .font(.system(size: 16, weight: .medium))
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.55))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isFocused ? Color.medoraBlue : Color.white.opacity(0.85), lineWidth: 1.5)
-            )
-            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
-    }
+            case .name:
+                Button {
+                    advanceStep(to: .age)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!isNameValid)
+                .opacity(isNameValid ? 1 : 0.55)
+
+            case .age:
+                Button {
+                    advanceStep(to: .managing)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!isAgeValid)
+                .opacity(isAgeValid ? 1 : 0.55)
+
+            case .managing:
+                Button {
+                    advanceStep(to: .healthPermission)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+
+            case .healthPermission:
+                Button(action: requestHealthAccess) {
+                    HStack(spacing: 10) {
+                        if healthStore.isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(healthStore.isLoading ? "Connecting" : "Connect Apple Health")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(healthStore.isLoading)
+
+                Button {
+                    advanceStep(to: .account)
+                } label: {
+                    Text("Maybe Later")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+
+            case .account:
+                Button {
+                    advanceStep(to: .reminders)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!isAccountValid)
+                .opacity(isAccountValid ? 1 : 0.55)
+
+            case .reminders:
+                Button {
+                    advanceStep(to: .carePartner)
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(wantsReminders == nil)
+                .opacity(wantsReminders == nil ? 0.55 : 1)
+
+            case .carePartner:
+                Button {
+                    advanceStep(to: .completed)
+                } label: {
+                    Text("Add Care Partner")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!isCarePartnerValid || cpName.isEmpty)
+                .opacity((isCarePartnerValid && !cpName.isEmpty) ? 1 : 0.55)
+
+                Button {
+                    cpName = ""
+                    cpEmail = ""
+                    advanceStep(to: .completed)
+                } label: {
+                    Text("Skip")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+
+            case .completed:
+                Button(action: submitRegistrationAndComplete) {
+                    HStack(spacing: 10) {
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(isSubmitting ? "Creating account..." : "Scan Document")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(isSubmitting)
+            }
+        } }
+
+    // MARK: - Reusable UI Components
 
     // MARK: - Helpers & Actions
     private func advanceStep(to nextStep: OnboardingStep) {
         focusedField = nil
+        HapticManager.shared.triggerImpact(style: .medium)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             step = nextStep
         }
@@ -822,6 +821,7 @@ struct ContentView: View {
 
     private func goBack() {
         focusedField = nil
+        HapticManager.shared.triggerImpact(style: .light)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             switch step {
             case .welcome:
@@ -882,12 +882,41 @@ struct ContentView: View {
                     finalCpRelationship
                 )
                 isSubmitting = false
+                HapticManager.shared.triggerNotification(type: .success)
                 // Sign up succeeded, notify parent to complete onboarding
                 onComplete(finalName)
             } catch {
                 isSubmitting = false
+                HapticManager.shared.triggerNotification(type: .error)
                 onboardingError = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Glass Text Field Modifier
+struct GlassTextFieldModifier: ViewModifier {
+    let isFocused: Bool
+    
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 16, weight: .medium))
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isFocused ? Color.medoraBlue : Color.white.opacity(0.85), lineWidth: 1.5)
+            )
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
+    }
+}
+
+extension View {
+    func glassStyle(isFocused: Bool) -> some View {
+        self.modifier(GlassTextFieldModifier(isFocused: isFocused))
     }
 }

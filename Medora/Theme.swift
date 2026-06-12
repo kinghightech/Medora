@@ -110,3 +110,27 @@ struct HealthMetricBox: View {
         )
     }
 }
+
+/// Helper to trigger haptic feedback on iOS devices.
+struct HapticManager {
+    static let shared = HapticManager()
+    
+    func triggerImpact(style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+    
+    func triggerNotification(type: UINotificationFeedbackGenerator.FeedbackType) {
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(type)
+    }
+    
+    func triggerSelection() {
+        let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
+        generator.selectionChanged()
+    }
+}
+
