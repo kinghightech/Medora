@@ -12,6 +12,7 @@ import Supabase
 struct MedoraProfile: Equatable {
     let fullName: String
     let email: String
+    let managing: [String]
 }
 
 @MainActor
@@ -57,6 +58,39 @@ final class AuthStore: ObservableObject {
             data: metadata
         )
 
-        currentProfile = MedoraProfile(fullName: cleanName, email: cleanEmail)
+        currentProfile = MedoraProfile(fullName: cleanName, email: cleanEmail, managing: managing)
+    }
+
+    /// Restores a previously signed-in user from the Supabase session stored
+    /// on this device, so returning users skip onboarding. Returns nil when
+    /// nobody is signed in (or the session can't be refreshed).
+    func restoreSession() async -> MedoraProfile? {
+        guard let session = try? await supabase.auth.session else {
+            return nil
+        }
+
+        let user = session.user
+        var name = ""
+        if case let .string(value)? = user.userMetadata["full_name"] {
+            name = value
+        }
+
+        var managing: [String] = []
+        if case let .array(values)? = user.userMetadata["managing"] {
+            managing = values.compactMap {
+                if case let .string(val) = $0 { return val }
+                return nil
+            }
+        }
+
+        let profile = MedoraProfile(fullName: name, email: user.email ?? "", managing: managing)
+        currentProfile = profile
+        return profile
+    }
+
+    /// Signs out of Supabase and clears the in-memory profile.
+    func signOut() async {
+        try? await supabase.auth.signOut()
+        currentProfile = nil
     }
 }

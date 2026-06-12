@@ -36,6 +36,34 @@ struct ClinicalTrial: Identifiable, Hashable {
     }
 }
 
+// MARK: - Geocoding Suggestion Model
+
+struct GeocodeSuggestion: Identifiable, Hashable {
+    let id: UUID
+    let formattedAddress: String
+    let latitude: Double
+    let longitude: Double
+
+    init(id: UUID = UUID(), formattedAddress: String, latitude: Double, longitude: Double) {
+        self.id = id
+        self.formattedAddress = formattedAddress
+        self.latitude = latitude
+        self.longitude = longitude
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(formattedAddress)
+        hasher.combine(latitude)
+        hasher.combine(longitude)
+    }
+
+    static func == (lhs: GeocodeSuggestion, rhs: GeocodeSuggestion) -> Bool {
+        lhs.formattedAddress == rhs.formattedAddress &&
+        lhs.latitude == rhs.latitude &&
+        lhs.longitude == rhs.longitude
+    }
+}
+
 // MARK: - Errors
 
 enum ClinicalTrialsError: LocalizedError {
@@ -58,45 +86,137 @@ enum ClinicalTrialsError: LocalizedError {
 
 struct ClinicalTrialsService {
 
+    func getPlacesAutocompleteSuggestions(for text: String) async -> [GeocodeSuggestion] {
+        let apiKey = "pk.eyJ1Ijoia2luZ2hpZ2h0ZWNoIiwiYSI6ImNtcGhmYjY2cTA0aTIyc3EwN2hoODNhZnIifQ.mi2MdoEdOqeRmBJMH99qbg"
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            return []
+        }
+        
+        let urlString = "https://api.mapbox.com/geocoding/v5/mapbox.places/\(escaped).json?access_token=\(apiKey)&autocomplete=true&limit=5"
+        guard let url = URL(string: urlString) else {
+            return []
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            return []
+        }
+        
+        struct MapboxGeocodeResponse: Decodable {
+            let features: [Feature]
+            
+            struct Feature: Decodable {
+                let place_name: String
+                let center: [Double]
+            }
+        }
+        
+        guard let decoded = try? JSONDecoder().decode(MapboxGeocodeResponse.self, from: data) else {
+            return []
+        }
+        
+        return decoded.features.compactMap { feature in
+            guard feature.center.count >= 2 else { return nil }
+            return GeocodeSuggestion(
+                formattedAddress: feature.place_name,
+                latitude: feature.center[1],
+                longitude: feature.center[0]
+            )
+        }
+    }
+
     /// Geocodes the typed location, then fetches nearby trials.
     /// - Parameters:
     ///   - locationText: A free-form location like "Boston, MA" or "94103".
     ///   - radiusMiles: Search radius around the location.
-    func searchTrials(near locationText: String, radiusMiles: Int = 100) async throws -> [ClinicalTrial] {
+    ///   - condition: Optional medical condition to filter.
+    func searchTrials(near locationText: String, radiusMiles: Int = 100, condition: String? = nil) async throws -> [ClinicalTrial] {
         let trimmed = locationText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ClinicalTrialsError.emptyLocation }
 
         let coordinate = try await geocode(trimmed)
         return try await fetchTrials(latitude: coordinate.latitude,
                                      longitude: coordinate.longitude,
-                                     radiusMiles: radiusMiles)
+                                     radiusMiles: radiusMiles,
+                                     condition: condition)
     }
 
-    // MARK: Geocoding (Apple MapKit — free, no API key)
+    /// Fetches trials using coordinates directly (e.g. from device GPS).
+    /// - Parameters:
+    ///   - latitude: Coordinate latitude.
+    ///   - longitude: Coordinate longitude.
+    ///   - radiusMiles: Search radius around the location.
+    ///   - condition: Optional medical condition to filter.
+    func searchTrials(latitude: Double, longitude: Double, radiusMiles: Int = 100, condition: String? = nil) async throws -> [ClinicalTrial] {
+        return try await fetchTrials(latitude: latitude,
+                                     longitude: longitude,
+                                     radiusMiles: radiusMiles,
+                                     condition: condition)
+    }
 
-    private func geocode(_ text: String) async throws -> CLLocationCoordinate2D {
-        guard let request = MKGeocodingRequest(addressString: text) else {
+    // MARK: Geocoding (Mapbox Geocoding API)
+
+    func geocode(_ text: String) async throws -> CLLocationCoordinate2D {
+        let apiKey = "pk.eyJ1Ijoia2luZ2hpZ2h0ZWNoIiwiYSI6ImNtcGhmYjY2cTA0aTIyc3EwN2hoODNhZnIifQ.mi2MdoEdOqeRmBJMH99qbg"
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             throw ClinicalTrialsError.locationNotFound
         }
-        let mapItems: [MKMapItem]
+        
+        let urlString = "https://api.mapbox.com/geocoding/v5/mapbox.places/\(escaped).json?access_token=\(apiKey)&limit=1"
+        guard let url = URL(string: urlString) else {
+            throw ClinicalTrialsError.locationNotFound
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        
+        let data: Data
+        let response: URLResponse
         do {
-            mapItems = try await request.mapItems
+            (data, response) = try await URLSession.shared.data(for: request)
         } catch {
             throw ClinicalTrialsError.locationNotFound
         }
-        guard let coordinate = mapItems.first?.location.coordinate else {
+        
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw ClinicalTrialsError.locationNotFound
         }
-        return coordinate
+        
+        struct MapboxGeocodeResponse: Decodable {
+            let features: [Feature]
+            
+            struct Feature: Decodable {
+                let place_name: String
+                let center: [Double]
+            }
+        }
+        
+        do {
+            let decoded = try JSONDecoder().decode(MapboxGeocodeResponse.self, from: data)
+            guard let firstResult = decoded.features.first, firstResult.center.count >= 2 else {
+                throw ClinicalTrialsError.locationNotFound
+            }
+            
+            return CLLocationCoordinate2D(latitude: firstResult.center[1],
+                                           longitude: firstResult.center[0])
+        } catch {
+            throw ClinicalTrialsError.locationNotFound
+        }
     }
 
     // MARK: ClinicalTrials.gov v2 request
 
     private func fetchTrials(latitude: Double,
                              longitude: Double,
-                             radiusMiles: Int) async throws -> [ClinicalTrial] {
+                             radiusMiles: Int,
+                             condition: String? = nil) async throws -> [ClinicalTrial] {
         var components = URLComponents(string: "https://clinicaltrials.gov/api/v2/studies")!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "format", value: "json"),
             // Limit to upcoming / actively enrolling trials.
             URLQueryItem(name: "filter.overallStatus",
@@ -110,6 +230,12 @@ struct ClinicalTrialsService {
             URLQueryItem(name: "pageSize", value: "30"),
             URLQueryItem(name: "sort", value: "@relevance")
         ]
+
+        if let condition = condition?.trimmingCharacters(in: .whitespacesAndNewlines), !condition.isEmpty {
+            queryItems.append(URLQueryItem(name: "query.cond", value: condition))
+        }
+
+        components.queryItems = queryItems
 
         guard let url = components.url else { throw ClinicalTrialsError.requestFailed }
 
@@ -130,7 +256,8 @@ struct ClinicalTrialsService {
 
         do {
             let decoded = try JSONDecoder().decode(StudiesResponse.self, from: data)
-            return decoded.studies.compactMap { $0.asClinicalTrial }
+            let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            return decoded.studies.compactMap { $0.toClinicalTrial(near: center) }
         } catch {
             throw ClinicalTrialsError.decodingFailed
         }
@@ -175,10 +302,16 @@ private struct RawStudy: Decodable {
         let city: String?
         let state: String?
         let country: String?
+        let geoPoint: GeoPoint?
+    }
+
+    struct GeoPoint: Decodable {
+        let lat: Double?
+        let lon: Double?
     }
 
     /// Flattens the nested API shape into our display model.
-    var asClinicalTrial: ClinicalTrial? {
+    func toClinicalTrial(near center: CLLocationCoordinate2D?) -> ClinicalTrial? {
         guard
             let id = protocolSection?.identificationModule?.nctId,
             let title = protocolSection?.identificationModule?.briefTitle
@@ -186,10 +319,39 @@ private struct RawStudy: Decodable {
 
         let status = protocolSection?.statusModule?.overallStatus ?? "UNKNOWN"
         let conditions = protocolSection?.conditionsModule?.conditions ?? []
-        let nearest = protocolSection?.contactsLocationsModule?.locations?.first.flatMap { loc in
-            [loc.facility, loc.city, loc.state, loc.country]
-                .compactMap { $0 }
-                .joined(separator: ", ")
+        
+        var nearest: String? = nil
+        var minDistance: Double = Double.infinity
+        
+        if let center = center, let locations = protocolSection?.contactsLocationsModule?.locations {
+            for loc in locations {
+                if let lat = loc.geoPoint?.lat, let lon = loc.geoPoint?.lon {
+                    let loc1 = CLLocation(latitude: center.latitude, longitude: center.longitude)
+                    let loc2 = CLLocation(latitude: lat, longitude: lon)
+                    let dist = loc1.distance(from: loc2) / 1609.344 // meters to miles
+                    
+                    if dist < minDistance {
+                        minDistance = dist
+                        nearest = [loc.facility, loc.city, loc.state, loc.country]
+                            .compactMap { $0 }
+                            .joined(separator: ", ")
+                        
+                        if dist < 1000 {
+                            let formattedDist = String(format: "%.1f", dist)
+                            nearest = (nearest ?? "") + " (\(formattedDist) miles away)"
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback to first location if no distance matching succeeded
+        if nearest == nil {
+            nearest = protocolSection?.contactsLocationsModule?.locations?.first.flatMap { loc in
+                [loc.facility, loc.city, loc.state, loc.country]
+                    .compactMap { $0 }
+                    .joined(separator: ", ")
+            }
         }
 
         return ClinicalTrial(

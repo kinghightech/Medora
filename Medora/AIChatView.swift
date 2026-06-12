@@ -10,10 +10,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct AIChatView: View {
+    @ObservedObject var healthStore: HealthStore
+    @ObservedObject var authStore: AuthStore
+
     @State private var messages: [AIChatMessage] = [
         AIChatMessage(
             role: .assistant,
-            text: "Ask me a question, or attach a document and I can help summarize or explain it."
+            text: "Hi, I'm Aura AI. I'm your personal health companion. Ask me anything about your health and I can help you."
         )
     ]
     @State private var inputText = ""
@@ -25,7 +28,11 @@ struct AIChatView: View {
     private let client = FeatherlessAIClient()
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            MedoraBackground()
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
@@ -47,7 +54,7 @@ struct AIChatView: View {
                     .padding(.top, 16)
                     .padding(.bottom, 18)
                 }
-                .background(Color.medoraBackground)
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: messages.count) {
                     scrollToBottom(proxy)
                 }
@@ -84,7 +91,7 @@ struct AIChatView: View {
                     .buttonStyle(AIIconButtonStyle())
                     .accessibilityLabel("Attach document")
 
-                    TextField("Message Medora AI", text: $inputText, axis: .vertical)
+                    TextField("Message Aura AI", text: $inputText, axis: .vertical)
                         .lineLimit(1...4)
                         .textFieldStyle(.plain)
                         .font(.system(size: 16))
@@ -113,6 +120,7 @@ struct AIChatView: View {
             }
             .padding(.top, 12)
             .background(.ultraThinMaterial)
+        }
         }
         .fileImporter(
             isPresented: $isShowingFileImporter,
@@ -165,12 +173,35 @@ struct AIChatView: View {
     }
 
     private func transcriptMessages(addingLatestUserText latestUserText: String) -> [AITranscriptMessage] {
+        let conditions = authStore.currentProfile?.managing.joined(separator: ", ") ?? "None specified"
+        let healthData = """
+        Calories: \(healthStore.summary.caloriesBurned)
+        Steps: \(healthStore.summary.steps)
+        Sleep: \(healthStore.summary.sleep)
+        Heart Rate: \(healthStore.summary.heartRate)
+        Blood Pressure: \(healthStore.summary.bloodPressure)
+        Blood Glucose: \(healthStore.summary.bloodGlucose)
+        """
+        
+        let systemPrompt = """
+        You are Aura AI, a highly advanced personal health companion inside the Medora app.
+        You strictly follow these rules:
+        1. ONLY answer questions about health, medicine, wellness, and biology.
+        2. If the user asks about ANYTHING else (e.g. math, coding, general knowledge, movies), you must politely refuse and remind them you are a health companion.
+        3. Do NOT lie or invent medical data. Be transparent about your limitations and do not claim to diagnose or prescribe.
+        
+        Here is the user's current health context from Apple Health and their profile:
+        Managing Conditions: \(conditions)
+        Today's Health Data:
+        \(healthData)
+        
+        Use this data naturally when answering.
+        """
+
         var transcript = [
             AITranscriptMessage(
                 role: "system",
-                content: """
-                You are Medora AI, a concise assistant inside a health demo app. Help with general questions and explain user-provided documents clearly. Do not claim to diagnose, prescribe, or replace a clinician.
-                """
+                content: systemPrompt
             )
         ]
 
@@ -254,8 +285,9 @@ private struct AIMessageBubble: View {
             .padding(.vertical, 11)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(isUser ? Color.medoraBlue : Color.medoraSurface)
+                    .fill(isUser ? AnyShapeStyle(Color.medoraBlue.gradient) : AnyShapeStyle(Color(UIColor.systemBackground)))
             )
+            .shadow(color: .black.opacity(isUser ? 0 : 0.05), radius: 8, x: 0, y: 4)
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(isUser ? .clear : Color.medoraHairline, lineWidth: 1)

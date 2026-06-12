@@ -3,7 +3,8 @@
 //  Medora
 //
 //  Top-level view that shows the onboarding flow until it's complete,
-//  then swaps in the main app (with its navigation bar).
+//  then swaps in the main app (with its navigation bar). The signed-in
+//  profile is persisted, so returning users skip onboarding entirely.
 //
 
 import SwiftUI
@@ -20,19 +21,38 @@ struct RootView: View {
     /// Handles secure account creation through Supabase Auth.
     @StateObject private var authStore = AuthStore()
 
-    /// The user's name once onboarding finishes; nil while onboarding.
-    @State private var userName: String?
+    /// Persisted across launches; empty while onboarding hasn't finished.
+    @AppStorage("medora.user.name") private var storedUserName = ""
+    @AppStorage("medora.user.email") private var storedUserEmail = ""
+
+    /// True while we check for a stored Supabase session at launch, so
+    /// keychain-restored users don't see onboarding flash by first.
+    @State private var isRestoringSession = true
 
     var body: some View {
         ZStack {
             Color(red: 0.9, green: 0.97, blue: 1.0)
                 .ignoresSafeArea()
 
-            if let userName {
-                MainTabView(userName: userName,
+            if !storedUserName.isEmpty {
+                MainTabView(userName: storedUserName,
+                            userEmail: storedUserEmail,
                             healthStore: healthStore,
-                            checklistStore: checklistStore)
+                            checklistStore: checklistStore,
+                            authStore: authStore,
+                            onSignOut: signOut)
+                    .environmentObject(authStore)
                     .transition(.opacity)
+                    .task {
+                        // Onboarding only loads health data on the run where
+                        // the user connects Apple Health; returning launches
+                        // re-query here instead.
+                        await healthStore.refreshHealthData()
+                    }
+            } else if isRestoringSession {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(Color.medoraBlue)
             } else {
                 ContentView(
                     healthStore: healthStore,
@@ -49,13 +69,48 @@ struct RootView: View {
                             carePartnerRelationship: cpRel
                         )
                     },
-                    onComplete: { name in
+                    onComplete: { name, email in
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            userName = name
+                            storedUserName = name
+                            storedUserEmail = email
                         }
                     }
                 )
+                .transition(.opacity)
             }
+        }
+        .task(restoreSessionIfNeeded)
+    }
+
+    /// Runs once at launch. If onboarding was completed on this device we
+    /// already have a stored profile; otherwise check whether a Supabase
+    /// session survives (e.g. after a reinstall) before showing onboarding.
+    @Sendable
+    private func restoreSessionIfNeeded() async {
+        let restoredProfile = await authStore.restoreSession()
+
+        guard storedUserName.isEmpty else {
+            isRestoringSession = false
+            return
+        }
+
+        if let profile = restoredProfile, !profile.email.isEmpty {
+            storedUserName = profile.fullName.isEmpty ? profile.email : profile.fullName
+            storedUserEmail = profile.email
+        }
+
+        withAnimation(.easeInOut(duration: 0.3)) {
+            isRestoringSession = false
+        }
+    }
+
+    private func signOut() {
+        Task {
+            await authStore.signOut()
+        }
+        withAnimation(.easeInOut(duration: 0.3)) {
+            storedUserName = ""
+            storedUserEmail = ""
         }
     }
 }

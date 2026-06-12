@@ -10,7 +10,7 @@ import Foundation
 enum FeatherlessAIConfig {
     static let apiKey = "rc_fac6687b5c8a91cce27b924c01c1712248de446f80bc2f762940f446e3ac85f0"
     static let baseURL = URL(string: "https://api.featherless.ai/v1/chat/completions")!
-    static let model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    static let model = "meta-llama/Llama-3.2-3B-Instruct"
 }
 
 struct AITranscriptMessage {

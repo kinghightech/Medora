@@ -18,6 +18,12 @@ struct HealthDataSummary {
     var bloodGlucose = "No data available"
 }
 
+struct ApplePill: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let hasSchedule: Bool
+}
+
 @MainActor
 final class HealthStore: ObservableObject {
     @Published private(set) var summary = HealthDataSummary()
@@ -52,6 +58,56 @@ final class HealthStore: ObservableObject {
         defer { isLoading = false }
 
         await loadHealthData(using: context)
+    }
+
+    func fetchApplePills(requestingAuthorization: Bool = false) async -> [ApplePill] {
+        guard let context = Self.makeHealthContext() else {
+            return []
+        }
+
+        // Medications use HealthKit's *per-object* authorization (like vision
+        // prescriptions): the user picks which medications to share, via a
+        // dedicated API. The standard requestAuthorization(toShare:read:) path
+        // rejects medication types and throws an NSException, so it must not be
+        // used here. Only prompt when the user explicitly taps "Sync with Apple
+        // Health"; the auto-sync on appearance silently reads whatever was
+        // already authorized so it never nags with a sheet on every visit.
+        if requestingAuthorization {
+            let medicationType = HKObjectType.userAnnotatedMedicationType()
+            try? await context.store.requestPerObjectReadAuthorization(for: medicationType, predicate: nil)
+        }
+
+        return await withCheckedContinuation { continuation in
+            var tempPills: [ApplePill] = []
+            
+            let query = HKUserAnnotatedMedicationQuery(predicate: nil, limit: HKObjectQueryNoLimit) { query, medication, done, error in
+                if let error = error {
+                    print("Error fetching user annotated medications: \(error.localizedDescription)")
+                    // On error, resume continuation immediately to prevent hang
+                    continuation.resume(returning: tempPills)
+                    return
+                }
+
+                if let med = medication {
+                    if !med.isArchived {
+                        let nickname = med.nickname?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+                        let name = nickname.isEmpty ? med.medication.displayText : nickname
+                        tempPills.append(
+                            ApplePill(
+                                id: med.medication.identifier.description,
+                                name: name,
+                                hasSchedule: med.hasSchedule
+                            )
+                        )
+                    }
+                }
+
+                if done {
+                    continuation.resume(returning: tempPills)
+                }
+            }
+            context.store.execute(query)
+        }
     }
 
     private func requestAuthorization(store: HKHealthStore, readTypes: Set<HKObjectType>) async throws {

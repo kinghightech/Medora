@@ -11,8 +11,11 @@ import SwiftUI
 
 struct MainTabView: View {
     let userName: String
+    let userEmail: String
     @ObservedObject var healthStore: HealthStore
     @ObservedObject var checklistStore: ChecklistStore
+    @ObservedObject var authStore: AuthStore
+    var onSignOut: () -> Void = {}
     @ObservedObject private var loc = LocalizationManager.shared
 
     var body: some View {
@@ -27,18 +30,18 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                ChecklistView(store: checklistStore)
+                ChecklistView(store: checklistStore, healthStore: healthStore)
             }
             .tabItem {
                 Label(loc.t("Checklist"), systemImage: "checklist")
             }
 
             NavigationStack {
-                AIChatView()
-                    .navigationTitle(loc.t("AI"))
+                AIChatView(healthStore: healthStore, authStore: authStore)
+                    .navigationTitle(loc.t("Aura AI"))
             }
             .tabItem {
-                Label(loc.t("AI"), systemImage: "sparkles")
+                Label(loc.t("Aura AI"), systemImage: "sparkles")
             }
 
             NavigationStack {
@@ -49,7 +52,7 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                ProfileView(userName: userName)
+                ProfileView(userName: userName, userEmail: userEmail, onSignOut: onSignOut)
             }
             .tabItem {
                 Label(loc.t("Profile"), systemImage: "person.crop.circle.fill")
@@ -70,6 +73,7 @@ private struct HomeView: View {
     @ObservedObject private var loc = LocalizationManager.shared
 
     private let today = Date()
+    @State private var isShowingSymptomLog = false
 
     private var greeting: String {
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,6 +97,7 @@ private struct HomeView: View {
                 VStack(spacing: 16) {
                     header
                     healthCard
+                    symptomsCard
                     tasksCard
                 }
                 .padding(.horizontal, 20)
@@ -102,6 +107,11 @@ private struct HomeView: View {
         }
         .navigationTitle("Medora")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isShowingSymptomLog) {
+            NavigationStack {
+                SymptomLogView()
+            }
+        }
     }
 
     // MARK: Header
@@ -308,12 +318,48 @@ private struct HomeView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
     }
+
+    private var symptomsCard: some View {
+        Button {
+            isShowingSymptomLog = true
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "book.closed.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.medoraBlue, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(loc.t("Record any symptoms"))
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    
+                    Text(loc.t("Type or dictate how you are feeling"))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(Color.medoraSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.06), radius: 16, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 #if DEBUG && targetEnvironment(simulator)
 #Preview {
     MainTabView(userName: "Alex",
+                userEmail: "alex@example.com",
                 healthStore: HealthStore(),
-                checklistStore: ChecklistStore())
+                checklistStore: ChecklistStore(),
+                authStore: AuthStore())
 }
 #endif

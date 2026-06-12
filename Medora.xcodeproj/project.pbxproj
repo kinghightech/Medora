@@ -270,8 +270,11 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, and sleep data to show your health summary.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, sleep, and medications to show your health summary and sync your pill schedule.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Medora does not write health data, but this permission text is included to keep Apple Health authorization fully configured.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Medora uses your location to find clinical trials near you.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Medora uses your microphone for speech-to-text dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Medora uses speech recognition to dictate your symptoms.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -311,8 +314,11 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, and sleep data to show your health summary.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, sleep, and medications to show your health summary and sync your pill schedule.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Medora does not write health data, but this permission text is included to keep Apple Health authorization fully configured.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Medora uses your location to find clinical trials near you.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Medora uses your microphone for speech-to-text dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Medora uses speech recognition to dictate your symptoms.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

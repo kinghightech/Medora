@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 extension Color {
     // MARK: Brand accents (constant across light/dark)
@@ -33,7 +34,10 @@ struct MedoraBackground: View {
 }
 
 /// Reusable filled button used for primary actions across the app.
+/// Dims automatically when the button is `.disabled(...)`.
 struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(.white)
@@ -43,6 +47,7 @@ struct PrimaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.medoraBlue.opacity(configuration.isPressed ? 0.78 : 1))
             )
+            .opacity(isEnabled ? 1 : 0.55)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
@@ -50,6 +55,8 @@ struct PrimaryButtonStyle: ButtonStyle {
 
 /// Reusable lightly-tinted button used for secondary actions across the app.
 struct SecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(Color.medoraBlue)
@@ -63,7 +70,18 @@ struct SecondaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Color.medoraBlue.opacity(0.16), lineWidth: 1)
             )
+            .opacity(isEnabled ? 1 : 0.55)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// A lightweight button style that slightly shrinks and fades the button when pressed.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.9 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
@@ -112,25 +130,41 @@ struct HealthMetricBox: View {
 }
 
 /// Helper to trigger haptic feedback on iOS devices.
-struct HapticManager {
+/// Generators are created once and re-prepared after each use so the Taptic
+/// Engine stays warm, instead of paying generator setup on every tap.
+@MainActor
+final class HapticManager {
     static let shared = HapticManager()
-    
+
+    private let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
+    private let notificationGenerator = UINotificationFeedbackGenerator()
+    private let selectionGenerator = UISelectionFeedbackGenerator()
+
+    private init() {}
+
     func triggerImpact(style: UIImpactFeedbackGenerator.FeedbackStyle) {
-        let generator = UIImpactFeedbackGenerator(style: style)
-        generator.prepare()
+        let generator: UIImpactFeedbackGenerator
+        switch style {
+        case .light:
+            generator = lightImpact
+        case .medium:
+            generator = mediumImpact
+        default:
+            generator = UIImpactFeedbackGenerator(style: style)
+        }
         generator.impactOccurred()
+        generator.prepare()
     }
-    
+
     func triggerNotification(type: UINotificationFeedbackGenerator.FeedbackType) {
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        generator.notificationOccurred(type)
+        notificationGenerator.notificationOccurred(type)
+        notificationGenerator.prepare()
     }
-    
+
     func triggerSelection() {
-        let generator = UISelectionFeedbackGenerator()
-        generator.prepare()
-        generator.selectionChanged()
+        selectionGenerator.selectionChanged()
+        selectionGenerator.prepare()
     }
 }
 
