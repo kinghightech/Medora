@@ -2,408 +2,892 @@
 //  ContentView.swift
 //  Medora
 //
-//  Created by Aahish Abbani on 6/11/26.
-//
 
 import SwiftUI
 
 struct ContentView: View {
     private enum OnboardingStep {
-        case welcome
-        case name
-        case healthPermission
-        case healthDashboard
-        case healthUnavailable
+        case welcome               // Screen 1: Welcome to Medora
+        case name                  // Screen 2: What should we call you?
+        case age                   // Screen 3: How old are you?
+        case managing              // Screen 4: What are you currently managing?
+        case healthPermission      // Screen 6: Connect your Apple Health data
+        case account               // Screen 7: Where should we save your progress?
+        case reminders             // Screen 8: Would you like medication reminders?
+        case carePartner           // Screen 9: Add a care partner (optional)
+        case completed             // Screen 10: You're all set
+    }
+
+    private enum OnboardingField: Hashable {
+        case firstName
+        case lastName
+        case age
+        case email
+        case password
+        case confirmPassword
+        case cpName
+        case cpEmail
     }
 
     @ObservedObject var healthStore: HealthStore
 
-    /// Called when the user finishes onboarding, passing their entered name.
+    /// Called when the user completes onboarding and registers their account.
+    var onCreateAccount: (
+        _ name: String,
+        _ email: String,
+        _ password: String,
+        _ age: Int?,
+        _ managing: [String],
+        _ reminders: Bool,
+        _ carePartnerName: String?,
+        _ carePartnerEmail: String?,
+        _ carePartnerRelationship: String?
+    ) async throws -> Void = { _, _, _, _, _, _, _, _, _ in }
+
+    /// Called when onboarding finishes and we transition to the main app.
     var onComplete: (String) -> Void = { _ in }
 
+    // MARK: - State Variables
     @State private var step: OnboardingStep = .welcome
-    @State private var name = ""
-    @FocusState private var isNameFieldFocused: Bool
+    @FocusState private var focusedField: OnboardingField?
 
-    private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Screen 2 Name
+    @State private var firstName = ""
+    @State private var lastName = ""
+
+    // Screen 3 Age
+    @State private var ageString = ""
+
+    // Screen 4 Managing Conditions
+    private let availableConditions = [
+        "Heart Health", "Diabetes", "Cancer", "Asthma",
+        "High Blood Pressure", "Recovery After Surgery",
+        "Mental Health", "Chronic Pain", "Autoimmune Condition", "Other"
+    ]
+    @State private var selectedConditions: Set<String> = []
+
+    // Screen 7 Account
+    @State private var email = ""
+    @State private var password = ""
+    @State private var confirmPassword = ""
+
+    // Screen 8 Medication Reminders
+    @State private var wantsReminders: Bool? = nil
+
+    // Screen 9 Care Partner
+    @State private var cpName = ""
+    @State private var cpEmail = ""
+    @State private var cpRelationship = "Spouse"
+    private let relationships = ["Spouse", "Parent", "Caregiver", "Family Member"]
+
+    // Loader & Errors
+    @State private var isSubmitting = false
+    @State private var onboardingError: String? = nil
+
+    // MARK: - Computeds & Validation
+    private var cleanFullName: String {
+        let f = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let l = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return l.isEmpty ? f : "\(f) \(l)"
     }
 
-    var body: some View {
-        ZStack {
-            Color(red: 0.9, green: 0.97, blue: 1.0)
-                .ignoresSafeArea()
+    private var parsedAge: Int? {
+        Int(ageString.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
-            ScrollView {
-                VStack(spacing: 22) {
-                    startupHeader
+    private var isNameValid: Bool {
+        !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
-                    VStack(spacing: 28) {
-                        switch step {
-                        case .welcome:
-                            welcomeScreen
-                        case .name:
-                            nameScreen
-                        case .healthPermission:
-                            healthPermissionScreen
-                        case .healthDashboard:
-                            healthDashboardScreen
-                        case .healthUnavailable:
-                            healthUnavailableScreen
-                        }
-                    }
-                    .frame(maxWidth: cardMaxWidth)
-                    .padding(.horizontal, 24)
-                    .padding(.top, cardTopPadding)
-                    .padding(.bottom, cardBottomPadding)
-                    .background(Color.medoraSurface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.medoraBlue.opacity(0.18), lineWidth: 1)
-                    )
-                    .shadow(color: Color.medoraDeepBlue.opacity(0.14), radius: 22, x: 0, y: 12)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 20)
-                .padding(.top, 26)
-                .padding(.bottom, 34)
-            }
+    private var isAgeValid: Bool {
+        if let age = parsedAge, age > 0 && age < 120 {
+            return true
+        }
+        return false
+    }
+
+    private var isEmailValid: Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.contains("@") && trimmed.contains(".")
+    }
+
+    private var isPasswordValid: Bool {
+        password.count >= 8
+    }
+
+    private var isAccountValid: Bool {
+        isEmailValid && isPasswordValid && password == confirmPassword
+    }
+
+    private var isCarePartnerValid: Bool {
+        let nameTrim = cpName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let emailTrim = cpEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        if nameTrim.isEmpty && emailTrim.isEmpty { return true }
+        if !nameTrim.isEmpty && emailTrim.contains("@") && emailTrim.contains(".") { return true }
+        return false
+    }
+
+    private var progressFraction: Double {
+        switch step {
+        case .welcome: return 0.1
+        case .name: return 0.2
+        case .age: return 0.3
+        case .managing: return 0.4
+        case .healthPermission: return 0.5
+        case .account: return 0.6
+        case .reminders: return 0.7
+        case .carePartner: return 0.8
+        case .completed: return 1.0
         }
     }
 
     private var canGoBack: Bool {
-        switch step {
-        case .name, .healthPermission:
-            return true
-        case .welcome, .healthDashboard, .healthUnavailable:
-            return false
-        }
+        step != .welcome && step != .completed
     }
 
-    private var cardMaxWidth: CGFloat {
-        step == .healthDashboard ? 420 : 360
-    }
-
-    private var topSpacerLength: CGFloat {
-        step == .healthDashboard ? 18 : 34
-    }
-
-    private var bottomSpacerLength: CGFloat {
-        switch step {
-        case .healthDashboard:
-            return 28
-        case .name, .healthPermission:
-            return 86
-        case .welcome, .healthUnavailable:
-            return 64
-        }
-    }
-
-    private var cardTopPadding: CGFloat {
-        switch step {
-        case .name:
-            return 26
-        case .healthDashboard:
-            return 28
-        case .welcome, .healthPermission, .healthUnavailable:
-            return 34
-        }
-    }
-
-    private var cardBottomPadding: CGFloat {
-        step == .healthDashboard ? 28 : 34
-    }
-
-    private var startupHeader: some View {
-        HStack {
-            Image("MedoraLogo")
+    // MARK: - Body
+    var body: some View {
+        ZStack {
+            // Full-bleed premium background image
+            Image("onboardingbackground")
                 .resizable()
-                .scaledToFit()
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .scaledToFill()
+                .ignoresSafeArea()
 
-            Text("Medora")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.medoraDeepBlue)
+            // Soft overlay to maintain readability
+            Color.white.opacity(0.12)
+                .ignoresSafeArea()
 
-            Spacer(minLength: 12)
+            VStack(spacing: 0) {
+                // Header (Back button and Progress Indicator)
+                headerBar
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
 
+                Spacer()
+
+                // Main Content container (no white card, fully integrated with background)
+                ScrollView {
+                    VStack(spacing: 32) {
+                        switch step {
+                        case .welcome:
+                            welcomeScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .name:
+                            nameScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .age:
+                            ageScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .managing:
+                            managingScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .healthPermission:
+                            healthPermissionScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .account:
+                            accountScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .reminders:
+                            remindersScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .carePartner:
+                            carePartnerScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        case .completed:
+                            completedScreen
+                                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+                    .padding(.bottom, 24)
+                }
+
+                Spacer()
+            }
+        }
+        .preferredColorScheme(.light)
+    }
+
+    // MARK: - Header Bar
+    private var headerBar: some View {
+        HStack(spacing: 16) {
             if canGoBack {
                 Button {
                     goBack()
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.headline)
-                        .frame(width: 42, height: 42)
-                        .background(Color.medoraSurface, in: Circle())
-                        .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .frame(width: 44, height: 44)
+                        .background(Color.white.opacity(0.5))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color(red: 0.1, green: 0.31, blue: 0.5))
-                .accessibilityLabel("Back")
+                .transition(.opacity)
+            } else {
+                Spacer()
+                    .frame(width: 44, height: 44)
             }
+
+            // Custom elegant progress line
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.white.opacity(0.35))
+                        .frame(height: 6)
+
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.medoraBlue)
+                        .frame(width: geo.size.width * progressFraction, height: 6)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: progressFraction)
+                }
+                .padding(.top, 19)
+            }
+            .frame(height: 44)
+
+            Spacer()
+                .frame(width: 44, height: 44)
         }
-        .frame(maxWidth: 420)
     }
 
-    private var logoMark: some View {
-        Image("MedoraLogo")
-            .resizable()
-            .scaledToFit()
-            .frame(width: 86, height: 86)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .shadow(color: Color.medoraBlue.opacity(0.18), radius: 14, x: 0, y: 8)
-            .accessibilityHidden(true)
-    }
-
+    // MARK: - Screen 1: Welcome
     private var welcomeScreen: some View {
-        VStack(spacing: 26) {
-            logoMark
+        VStack(spacing: 28) {
+            Image("MedoraLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 100, height: 100)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: Color.medoraBlue.opacity(0.18), radius: 14, x: 0, y: 8)
+                .padding(.top, 20)
 
-            Text("Welcome to Medora")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .fontWeight(.bold)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 12) {
+                Text("Welcome to Medora")
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("Your doctor's instructions, turned into a daily plan.")
+                    .font(.system(size: 18, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+
+                Text("We'll set up your care profile in under a minute.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             Button {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    step = .name
-                    isNameFieldFocused = true
-                }
+                advanceStep(to: .name)
             } label: {
-                Text("Next")
+                Text("Get Started")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(OnboardingButtonStyle())
+            .buttonStyle(PrimaryButtonStyle())
+            .padding(.top, 10)
         }
     }
 
+    // MARK: - Screen 2: What should we call you?
     private var nameScreen: some View {
-        VStack(spacing: 18) {
-            Text("What is your full name?")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: 300)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 8)
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text("What should we call you?")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
 
-            TextField("Your name", text: $name)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                .font(.system(size: 18, weight: .medium))
-                .padding(.horizontal, 16)
-                .frame(height: 54)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.medoraField)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(isNameFieldFocused ? Color(red: 0.05, green: 0.45, blue: 0.73) : Color.medoraHairline, lineWidth: 1.5)
-                )
-                .focused($isNameFieldFocused)
-                .submitLabel(.done)
-                .onSubmit(finishOnboarding)
+                Text("We'll personalize your care plan and reminders.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
-            Button(action: finishOnboarding) {
-                Text("Finish")
+            VStack(spacing: 14) {
+                glassTextField("First Name", text: $firstName, field: .firstName)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .lastName }
+
+                glassTextField("Last Name", text: $lastName, field: .lastName)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+            }
+            .padding(.horizontal, 4)
+
+            Button {
+                advanceStep(to: .age)
+            } label: {
+                Text("Continue")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(OnboardingButtonStyle())
-            .disabled(trimmedName.isEmpty)
-            .opacity(trimmedName.isEmpty ? 0.55 : 1)
-            .padding(.top, 6)
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(!isNameValid)
+            .opacity(isNameValid ? 1 : 0.55)
         }
     }
 
-    private var healthPermissionScreen: some View {
+    // MARK: - Screen 3: How old are you?
+    private var ageScreen: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text("How old are you?")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("This helps us personalize recommendations and reminders.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            glassTextField("Age", text: $ageString, field: .age)
+                .keyboardType(.numberPad)
+                .submitLabel(.done)
+                .onSubmit { focusedField = nil }
+                .padding(.horizontal, 4)
+
+            Button {
+                advanceStep(to: .managing)
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(!isAgeValid)
+            .opacity(isAgeValid ? 1 : 0.55)
+        }
+    }
+
+    // MARK: - Screen 4: What are you managing?
+    private var managingScreen: some View {
         VStack(spacing: 24) {
-            logoMark
+            VStack(spacing: 8) {
+                Text("What are you currently managing?")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("Select anything that applies.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 8) {
+                ForEach(availableConditions, id: \.self) { condition in
+                    let isSelected = selectedConditions.contains(condition)
+                    Button {
+                        if isSelected {
+                            selectedConditions.remove(condition)
+                        } else {
+                            selectedConditions.insert(condition)
+                        }
+                    } label: {
+                        HStack {
+                            Text(condition)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(Color.primary)
+                            Spacer()
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6))
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text("Don't worry — you can always update this later.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 4)
+
+            Button {
+                advanceStep(to: .healthPermission)
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .padding(.top, 8)
+        }
+    }
+
+    // MARK: - Screen 6: Connect Apple Health
+    private var healthPermissionScreen: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "heart.text.square.fill")
+                .font(.system(size: 80))
+                .foregroundStyle(Color.medoraBlue)
+                .shadow(color: Color.medoraBlue.opacity(0.18), radius: 10, x: 0, y: 6)
+                .padding(.top, 16)
+
+            VStack(spacing: 12) {
+                Text("Connect your Apple Health data")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("Let Medora automatically track progress toward your care goals.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+            }
+
+            // Health tracking highlights
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Daily movement & active energy", systemImage: "checkmark.circle.fill")
+                Label("Steps walked", systemImage: "checkmark.circle.fill")
+                Label("Sleep & rest quality", systemImage: "checkmark.circle.fill")
+                Label("Heart rate, blood pressure & glucose vitals", systemImage: "checkmark.circle.fill")
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Color.medoraDeepBlue)
+            .padding(18)
+            .background(Color.white.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
+            )
+
+            Text("Your health data stays private and under your control.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             VStack(spacing: 10) {
-                Text("Welcome, \(trimmedName)")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: requestHealthAccess) {
+                    HStack(spacing: 10) {
+                        if healthStore.isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(healthStore.isLoading ? "Connecting" : "Connect Apple Health")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(healthStore.isLoading)
 
-                Text("Connect Apple Health to continue.")
-                    .font(.system(size: 16, weight: .medium))
+                Button {
+                    advanceStep(to: .account)
+                } label: {
+                    Text("Maybe Later")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+    }
+
+    // MARK: - Screen 7: Where should we save progress?
+    private var accountScreen: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text("Where should we save your progress?")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
                     .multilineTextAlignment(.center)
+
+                Text("Create your account so your care plan stays synced and secure.")
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
-            Button(action: requestHealthAccess) {
+            VStack(spacing: 14) {
+                glassTextField("Email Address", text: $email, field: .email)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .password }
+
+                glassSecureField("Password", text: $password, field: .password)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .confirmPassword }
+
+                glassSecureField("Confirm Password", text: $confirmPassword, field: .confirmPassword)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+            }
+            .padding(.horizontal, 4)
+
+            Text("Password must be at least 8 characters.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+
+            Button {
+                advanceStep(to: .reminders)
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(!isAccountValid)
+            .opacity(isAccountValid ? 1 : 0.55)
+        }
+    }
+
+    // MARK: - Screen 8: Medication Reminders
+    private var remindersScreen: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text("Would you like medication reminders?")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("We'll help you stay on track.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 12) {
+                reminderOptionRow(title: "Yes, remind me", selection: true)
+                reminderOptionRow(title: "Not right now", selection: false)
+            }
+
+            Button {
+                advanceStep(to: .carePartner)
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(wantsReminders == nil)
+            .opacity(wantsReminders == nil ? 0.55 : 1)
+        }
+    }
+
+    private func reminderOptionRow(title: String, selection: Bool) -> some View {
+        let isSelected = wantsReminders == selection
+        return Button {
+            wantsReminders = selection
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                Spacer()
+                Circle()
+                    .stroke(isSelected ? Color.medoraBlue : Color.secondary.opacity(0.6), lineWidth: 2)
+                    .frame(width: 22, height: 22)
+                    .overlay(
+                        Circle()
+                            .fill(isSelected ? Color.medoraBlue : Color.clear)
+                            .padding(4)
+                    )
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.65) : Color.white.opacity(0.35))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isSelected ? Color.medoraBlue.opacity(0.6) : Color.white.opacity(0.8), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Screen 9: Add a Care Partner
+    private var carePartnerScreen: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text("Add a care partner (optional)")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("Share updates with someone you trust.")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 14) {
+                glassTextField("Partner Name", text: $cpName, field: .cpName)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .cpEmail }
+
+                glassTextField("Partner Email Address", text: $cpEmail, field: .cpEmail)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+
+                // Relationship selection picker
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Relationship")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .padding(.leading, 6)
+
+                    HStack(spacing: 8) {
+                        ForEach(relationships, id: \.self) { relationship in
+                            let isSelected = cpRelationship == relationship
+                            Button {
+                                cpRelationship = relationship
+                            } label: {
+                                Text(relationship)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(isSelected ? .white : Color.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(isSelected ? Color.medoraBlue : Color.white.opacity(0.45))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(isSelected ? Color.clear : Color.white.opacity(0.8), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 4)
+
+            VStack(spacing: 10) {
+                Button {
+                    advanceStep(to: .completed)
+                } label: {
+                    Text("Add Care Partner")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!isCarePartnerValid || cpName.isEmpty)
+                .opacity((isCarePartnerValid && !cpName.isEmpty) ? 1 : 0.55)
+
+                Button {
+                    // Reset care partner fields
+                    cpName = ""
+                    cpEmail = ""
+                    advanceStep(to: .completed)
+                } label: {
+                    Text("Skip")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+    }
+
+    // MARK: - Screen 10: You're all set
+    private var completedScreen: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 86))
+                .foregroundStyle(Color.medoraGreen)
+                .shadow(color: Color.medoraGreen.opacity(0.18), radius: 10, x: 0, y: 6)
+                .padding(.top, 16)
+
+            VStack(spacing: 12) {
+                Text("You're all set")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .multilineTextAlignment(.center)
+
+                Text("Medora is ready.")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.85))
+
+                Text("Next step:\nScan your first doctor instruction sheet and we'll turn it into a personalized care plan.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+            }
+
+            if let onboardingError {
+                Text(onboardingError)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+            }
+
+            Button(action: submitRegistrationAndComplete) {
                 HStack(spacing: 10) {
-                    if healthStore.isLoading {
+                    if isSubmitting {
                         ProgressView()
                             .tint(.white)
                     }
-
-                    Text(healthStore.isLoading ? "Connecting" : "Connect Health")
+                    Text(isSubmitting ? "Creating account..." : "Scan Document")
                         .font(.system(size: 17, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(OnboardingButtonStyle())
-            .disabled(healthStore.isLoading)
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(isSubmitting)
         }
     }
 
-    private var healthDashboardScreen: some View {
-        VStack(spacing: 22) {
-            VStack(spacing: 8) {
-                Text("Health Summary")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text("Today and last night")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(spacing: 12) {
-                HealthMetricBox(
-                    title: "Calories burned",
-                    value: healthStore.summary.caloriesBurned,
-                    systemImage: "flame.fill",
-                    tint: Color(red: 0.88, green: 0.27, blue: 0.14)
-                )
-
-                HealthMetricBox(
-                    title: "Steps",
-                    value: healthStore.summary.steps,
-                    systemImage: "figure.walk",
-                    tint: Color(red: 0.05, green: 0.45, blue: 0.73)
-                )
-
-                HealthMetricBox(
-                    title: "Sleep data",
-                    value: healthStore.summary.sleep,
-                    systemImage: "moon.zzz.fill",
-                    tint: Color(red: 0.32, green: 0.28, blue: 0.68)
-                )
-            }
-
-            VStack(spacing: 12) {
-                Button {
-                    onComplete(trimmedName)
-                } label: {
-                    Text("Continue")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(OnboardingButtonStyle())
-
-                Button(action: refreshHealthData) {
-                    HStack(spacing: 8) {
-                        if healthStore.isLoading {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                        }
-
-                        Text(healthStore.isLoading ? "Refreshing" : "Refresh")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(healthStore.isLoading)
-            }
-        }
+    // MARK: - Reusable UI Components
+    private func glassTextField(_ placeholder: String, text: Binding<String>, field: OnboardingField) -> some View {
+        let isFocused = focusedField == field
+        return TextField(placeholder, text: text)
+            .focused($focusedField, equals: field)
+            .font(.system(size: 16, weight: .medium))
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isFocused ? Color.medoraBlue : Color.white.opacity(0.85), lineWidth: 1.5)
+            )
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
     }
 
-    private var healthUnavailableScreen: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 62))
-                .foregroundStyle(Color(red: 0.86, green: 0.37, blue: 0.13))
-                .accessibilityHidden(true)
-
-            Text("Unfortunately you're not able to use our application. Please try again.")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button(action: requestHealthAccess) {
-                Text("Try Again")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(OnboardingButtonStyle())
-            .disabled(healthStore.isLoading)
-        }
+    private func glassSecureField(_ placeholder: String, text: Binding<String>, field: OnboardingField) -> some View {
+        let isFocused = focusedField == field
+        return SecureField(placeholder, text: text)
+            .focused($focusedField, equals: field)
+            .font(.system(size: 16, weight: .medium))
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isFocused ? Color.medoraBlue : Color.white.opacity(0.85), lineWidth: 1.5)
+            )
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
     }
 
-    private func finishOnboarding() {
-        guard !trimmedName.isEmpty else { return }
-
+    // MARK: - Helpers & Actions
+    private func advanceStep(to nextStep: OnboardingStep) {
+        focusedField = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            step = .healthPermission
-            isNameFieldFocused = false
+            step = nextStep
         }
     }
 
     private func goBack() {
+        focusedField = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             switch step {
             case .welcome:
                 break
             case .name:
                 step = .welcome
-                isNameFieldFocused = false
-            case .healthPermission:
+            case .age:
                 step = .name
-                isNameFieldFocused = true
-            case .healthDashboard, .healthUnavailable:
-                break
+            case .managing:
+                step = .age
+            case .healthPermission:
+                step = .managing
+            case .account:
+                step = .healthPermission
+            case .reminders:
+                step = .account
+            case .carePartner:
+                step = .reminders
+            case .completed:
+                step = .carePartner
             }
         }
     }
 
     private func requestHealthAccess() {
         Task {
-            let didConnect = await healthStore.requestAccessAndLoadData()
+            _ = await healthStore.requestAccessAndLoadData()
+            // Even if they deny, we advance to next step (.account)
+            advanceStep(to: .account)
+        }
+    }
 
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                step = didConnect ? .healthDashboard : .healthUnavailable
+    private func submitRegistrationAndComplete() {
+        isSubmitting = true
+        onboardingError = nil
+
+        let finalName = cleanFullName
+        let finalEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let finalPassword = password
+        let finalAge = parsedAge
+        let finalManaging = Array(selectedConditions)
+        let finalReminders = wantsReminders ?? false
+        let finalCpName = cpName.isEmpty ? nil : cpName
+        let finalCpEmail = cpEmail.isEmpty ? nil : cpEmail
+        let finalCpRelationship = cpName.isEmpty ? nil : cpRelationship
+
+        Task { @MainActor in
+            do {
+                try await onCreateAccount(
+                    finalName,
+                    finalEmail,
+                    finalPassword,
+                    finalAge,
+                    finalManaging,
+                    finalReminders,
+                    finalCpName,
+                    finalCpEmail,
+                    finalCpRelationship
+                )
+                isSubmitting = false
+                // Sign up succeeded, notify parent to complete onboarding
+                onComplete(finalName)
+            } catch {
+                isSubmitting = false
+                onboardingError = error.localizedDescription
             }
         }
     }
-
-    private func refreshHealthData() {
-        Task {
-            await healthStore.refreshHealthData()
-        }
-    }
 }
-
-private struct OnboardingButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white)
-            .frame(height: 54)
-            .padding(.horizontal, 18)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(red: 0.05, green: 0.45, blue: 0.73).opacity(configuration.isPressed ? 0.78 : 1))
-            )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
-#if DEBUG && targetEnvironment(simulator)
-#Preview("Welcome") {
-    ContentView(healthStore: HealthStore())
-}
-#endif

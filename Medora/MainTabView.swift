@@ -129,6 +129,19 @@ private struct HomeView: View {
 
     // MARK: Health
 
+    private var pillCompliance: String {
+        let tasks = todaysTasks
+        let pillTasks = tasks.filter { task in
+            let title = task.title.lowercased()
+            return title.contains("pill") || title.contains("med") || title.contains("tablet") || title.contains("capsule") || title.contains("dose") || title.contains("medication")
+        }
+        guard !pillTasks.isEmpty else {
+            return loc.t("No pills scheduled")
+        }
+        let completed = pillTasks.filter(\.isDone).count
+        return "\(completed) \(loc.t("of")) \(pillTasks.count) \(loc.t("taken"))"
+    }
+
     private var healthCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -176,6 +189,34 @@ private struct HomeView: View {
                 value: metricValue(healthStore.summary.sleep),
                 systemImage: "moon.zzz.fill",
                 tint: Color(red: 0.32, green: 0.28, blue: 0.68)
+            )
+
+            HealthMetricBox(
+                title: loc.t("Heart Rate"),
+                value: metricValue(healthStore.summary.heartRate),
+                systemImage: "heart.fill",
+                tint: Color(red: 0.94, green: 0.21, blue: 0.26)
+            )
+
+            HealthMetricBox(
+                title: loc.t("Blood Pressure"),
+                value: metricValue(healthStore.summary.bloodPressure),
+                systemImage: "heart.text.square.fill",
+                tint: Color(red: 0.05, green: 0.72, blue: 0.61)
+            )
+
+            HealthMetricBox(
+                title: loc.t("Blood Glucose"),
+                value: metricValue(healthStore.summary.bloodGlucose),
+                systemImage: "water.waves",
+                tint: Color(red: 0.92, green: 0.49, blue: 0.19)
+            )
+
+            HealthMetricBox(
+                title: loc.t("Medications"),
+                value: pillCompliance,
+                systemImage: "pills.fill",
+                tint: Color(red: 0.52, green: 0.28, blue: 0.88)
             )
         }
         .padding(18)

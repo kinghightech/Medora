@@ -17,6 +17,9 @@ struct RootView: View {
     /// the home screen.
     @StateObject private var checklistStore = ChecklistStore()
 
+    /// Handles secure account creation through Supabase Auth.
+    @StateObject private var authStore = AuthStore()
+
     /// The user's name once onboarding finishes; nil while onboarding.
     @State private var userName: String?
 
@@ -31,11 +34,27 @@ struct RootView: View {
                             checklistStore: checklistStore)
                     .transition(.opacity)
             } else {
-                ContentView(healthStore: healthStore, onComplete: { name in
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        userName = name
+                ContentView(
+                    healthStore: healthStore,
+                    onCreateAccount: { name, email, password, age, managing, reminders, cpName, cpEmail, cpRel in
+                        try await authStore.signUp(
+                            name: name,
+                            email: email,
+                            password: password,
+                            age: age,
+                            managing: managing,
+                            medicationReminders: reminders,
+                            carePartnerName: cpName,
+                            carePartnerEmail: cpEmail,
+                            carePartnerRelationship: cpRel
+                        )
+                    },
+                    onComplete: { name in
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            userName = name
+                        }
                     }
-                })
+                )
             }
         }
     }

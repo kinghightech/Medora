@@ -13,14 +13,17 @@ struct HealthDataSummary {
     var caloriesBurned = "No data available"
     var steps = "No data available"
     var sleep = "No data available"
+    var heartRate = "No data available"
+    var bloodPressure = "No data available"
+    var bloodGlucose = "No data available"
 }
 
+@MainActor
 final class HealthStore: ObservableObject {
     @Published private(set) var summary = HealthDataSummary()
     @Published private(set) var isLoading = false
 
     private let calendar = Calendar.current
-
     private let noDataText = "No data available"
 
     func requestAccessAndLoadData() async -> Bool {
@@ -74,6 +77,7 @@ final class HealthStore: ObservableObject {
         // "Last night" must work at any hour, including just after midnight,
         // so look back a full day rather than using rigid calendar-day edges.
         let sleepWindowStart = calendar.date(byAdding: .hour, value: -24, to: now) ?? todayStart
+        let vitalsLookback = calendar.date(byAdding: .hour, value: -24, to: now) ?? todayStart
 
         // Each metric loads independently so one failure can't wipe out the others.
         let stepsValue = await todayTotal(
@@ -97,10 +101,45 @@ final class HealthStore: ObservableObject {
             end: now
         )) ?? nil
 
+        let hrValue = await fetchMostRecentSample(
+            store: context.store,
+            type: context.heartRateType,
+            unit: HKUnit(from: "count/min"),
+            start: vitalsLookback,
+            end: now
+        )
+
+        let bpSys = await fetchMostRecentSample(
+            store: context.store,
+            type: context.bpSystolicType,
+            unit: .millimeterOfMercury(),
+            start: vitalsLookback,
+            end: now
+        )
+
+        let bpDia = await fetchMostRecentSample(
+            store: context.store,
+            type: context.bpDiastolicType,
+            unit: .millimeterOfMercury(),
+            start: vitalsLookback,
+            end: now
+        )
+
+        let glucoseValue = await fetchMostRecentSample(
+            store: context.store,
+            type: context.bloodGlucoseType,
+            unit: HKUnit(from: "mg/dL"),
+            start: vitalsLookback,
+            end: now
+        )
+
         summary = HealthDataSummary(
             caloriesBurned: formatCalories(calorieValue),
             steps: formatSteps(stepsValue),
-            sleep: formatSleep(sleepDuration)
+            sleep: formatSleep(sleepDuration),
+            heartRate: formatHeartRate(hrValue),
+            bloodPressure: formatBloodPressure(sys: bpSys, dia: bpDia),
+            bloodGlucose: formatBloodGlucose(glucoseValue)
         )
     }
 
@@ -221,11 +260,43 @@ final class HealthStore: ObservableObject {
         }
     }
 
+    private func fetchMostRecentSample(
+        store: HKHealthStore,
+        type: HKQuantityType,
+        unit: HKUnit,
+        start: Date,
+        end: Date
+    ) async -> Double? {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: 1,
+                sortDescriptors: [sortDescriptor]
+            ) { _, samples, error in
+                guard error == nil,
+                      let sample = samples?.first as? HKQuantitySample else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: sample.quantity.doubleValue(for: unit))
+            }
+            store.execute(query)
+        }
+    }
+
     private static func makeHealthContext() -> HealthContext? {
         guard HKHealthStore.isHealthDataAvailable(),
               let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount),
               let calorieType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
-              let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else {
+              let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis),
+              let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
+              let bpSystolicType = HKQuantityType.quantityType(forIdentifier: .bloodPressureSystolic),
+              let bpDiastolicType = HKQuantityType.quantityType(forIdentifier: .bloodPressureDiastolic),
+              let bloodGlucoseType = HKQuantityType.quantityType(forIdentifier: .bloodGlucose) else {
             return nil
         }
 
@@ -233,7 +304,11 @@ final class HealthStore: ObservableObject {
             store: HKHealthStore(),
             stepType: stepType,
             calorieType: calorieType,
-            sleepType: sleepType
+            sleepType: sleepType,
+            heartRateType: heartRateType,
+            bpSystolicType: bpSystolicType,
+            bpDiastolicType: bpDiastolicType,
+            bloodGlucoseType: bloodGlucoseType
         )
     }
 
@@ -271,6 +346,21 @@ final class HealthStore: ObservableObject {
         }
 
         return "\(minutes) min"
+    }
+
+    private func formatHeartRate(_ value: Double?) -> String {
+        guard let value else { return noDataText }
+        return "\(Int(value.rounded())) bpm"
+    }
+
+    private func formatBloodPressure(sys: Double?, dia: Double?) -> String {
+        guard let sys, let dia else { return noDataText }
+        return "\(Int(sys.rounded()))/\(Int(dia.rounded())) mmHg"
+    }
+
+    private func formatBloodGlucose(_ value: Double?) -> String {
+        guard let value else { return noDataText }
+        return "\(Int(value.rounded())) mg/dL"
     }
 
     nonisolated private static let asleepValues: Set<Int> = [
@@ -316,9 +406,13 @@ private struct HealthContext {
     let stepType: HKQuantityType
     let calorieType: HKQuantityType
     let sleepType: HKCategoryType
+    let heartRateType: HKQuantityType
+    let bpSystolicType: HKQuantityType
+    let bpDiastolicType: HKQuantityType
+    let bloodGlucoseType: HKQuantityType
 
     var readTypes: Set<HKObjectType> {
-        [stepType, calorieType, sleepType]
+        [stepType, calorieType, sleepType, heartRateType, bpSystolicType, bpDiastolicType, bloodGlucoseType]
     }
 }
 

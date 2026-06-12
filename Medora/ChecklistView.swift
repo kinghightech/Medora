@@ -29,6 +29,7 @@ struct ChecklistTask: Identifiable, Codable, Equatable {
 
 /// Holds the tasks for every day, keyed by `yyyy-MM-dd`, and persists them to
 /// `UserDefaults` as JSON so they survive app launches.
+@MainActor
 final class ChecklistStore: ObservableObject {
     @Published private(set) var tasksByDay: [String: [ChecklistTask]] = [:]
 
