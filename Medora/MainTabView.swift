@@ -236,7 +236,11 @@ private struct HomeView: View {
 
     private func refreshHealthData() {
         Task {
-            await healthStore.refreshHealthData()
+            // Request authorization as well as re-querying: if read access was
+            // never granted (skipped/denied during onboarding), a plain refresh
+            // would silently return "No data available" forever. Re-requesting
+            // prompts the user when the status is still undetermined, then loads.
+            _ = await healthStore.requestAccessAndLoadData()
         }
     }
 
