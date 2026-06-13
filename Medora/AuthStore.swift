@@ -13,6 +13,7 @@ struct MedoraProfile: Equatable {
     let fullName: String
     let email: String
     let managing: [String]
+    let age: Int?
 }
 
 @MainActor
@@ -58,7 +59,7 @@ final class AuthStore: ObservableObject {
             data: metadata
         )
 
-        currentProfile = MedoraProfile(fullName: cleanName, email: cleanEmail, managing: managing)
+        currentProfile = MedoraProfile(fullName: cleanName, email: cleanEmail, managing: managing, age: age)
     }
 
     /// Restores a previously signed-in user from the Supabase session stored
@@ -83,7 +84,17 @@ final class AuthStore: ObservableObject {
             }
         }
 
-        let profile = MedoraProfile(fullName: name, email: user.email ?? "", managing: managing)
+        var age: Int?
+        switch user.userMetadata["age"] {
+        case .integer(let value)?:
+            age = value
+        case .double(let value)?:
+            age = Int(value)
+        default:
+            break
+        }
+
+        let profile = MedoraProfile(fullName: name, email: user.email ?? "", managing: managing, age: age)
         currentProfile = profile
         return profile
     }

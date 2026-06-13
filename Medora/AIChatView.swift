@@ -32,6 +32,9 @@ struct AIChatView: View {
             MedoraBackground()
                 .ignoresSafeArea()
 
+            if isUnderage {
+                ageGateView
+            } else {
             VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -56,6 +59,9 @@ struct AIChatView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: messages.count) {
+                    scrollToBottom(proxy)
+                }
+                .onChange(of: messages.last?.text) {
                     scrollToBottom(proxy)
                 }
                 .onChange(of: isSending) {
@@ -121,18 +127,102 @@ struct AIChatView: View {
             .padding(.top, 12)
             .background(.ultraThinMaterial)
         }
+            }
         }
         .fileImporter(
             isPresented: $isShowingFileImporter,
-            allowedContentTypes: [.pdf, .plainText, .text, .json, .commaSeparatedText],
+            allowedContentTypes: Self.importContentTypes,
             allowsMultipleSelection: false
         ) { result in
             handleFileImport(result)
         }
     }
 
+    // MARK: - Age gating & tailoring
+
+    private var userAge: Int? {
+        authStore.currentProfile?.age
+    }
+
+    /// Children under 13 are blocked from the AI companion (and shown a gate instead).
+    private var isUnderage: Bool {
+        if let age = userAge { return age < 13 }
+        return false
+    }
+
+    private enum AgeBand {
+        case youth      // 13–24
+        case adult      // 25–54
+        case senior     // 55+
+        case unspecified
+    }
+
+    private var ageBand: AgeBand {
+        guard let age = userAge else { return .unspecified }
+        switch age {
+        case ..<13: return .unspecified   // handled by the age gate
+        case 13...24: return .youth
+        case 25...54: return .adult
+        default: return .senior
+        }
+    }
+
+    /// Guidance injected into the system prompt so the model adapts tone and
+    /// examples to the user's life stage.
+    private var audienceGuidance: String {
+        switch ageBand {
+        case .youth:
+            return """
+            The user is a teen or young adult (ages 13–24). Use a warm, encouraging, and relatable tone with clear, \
+            jargon-free explanations. Relate advice to school, sports, social life, and building healthy habits early, \
+            and be especially supportive and non-judgmental about sleep, screen time, diet, stress, and body image.
+            """
+        case .adult:
+            return """
+            The user is an adult (ages 25–54). Use a direct, practical, and respectful tone. Give efficient, \
+            evidence-based guidance that fits a busy life balancing work, family, and health, and connect advice to \
+            long-term prevention and managing everyday stress.
+            """
+        case .senior:
+            return """
+            The user is an older adult (ages 55+). Use a clear, patient, and respectful tone without slang. Keep steps \
+            simple and easy to follow, and be attentive to mobility, medication management, chronic-condition care, and \
+            staying independent. Gently encourage confirming changes with their doctor.
+            """
+        case .unspecified:
+            return "Tailor your tone and examples to a general adult audience."
+        }
+    }
+
+    private var ageGateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 52, weight: .semibold))
+                .foregroundStyle(Color.medoraBlue)
+
+            Text("You need to be 13 or older to use Aura AI")
+                .font(.system(size: 20, weight: .bold))
+                .multilineTextAlignment(.center)
+
+            Text("Aura AI isn't available for users under 13. Please ask a parent or guardian for help.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(28)
+        .frame(maxWidth: 360)
+    }
+
+    private static let importContentTypes: [UTType] = {
+        var types: [UTType] = [.pdf, .plainText, .text, .json, .commaSeparatedText]
+        if let markdown = UTType(filenameExtension: "md") {
+            types.append(markdown)
+        }
+        return types
+    }()
+
     private var canSend: Bool {
-        !isSending && (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingAttachment != nil)
+        !isSending && !isUnderage && (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingAttachment != nil)
     }
 
     private func sendMessage() {
@@ -156,16 +246,36 @@ struct AIChatView: View {
         isSending = true
 
         Task {
+            let transcript = transcriptMessages(addingLatestUserText: apiText)
+            var assembled = ""
+            var assistantIndex: Int?
+
             do {
-                let reply = try await client.send(messages: transcriptMessages(addingLatestUserText: apiText))
-                messages.append(AIChatMessage(role: .assistant, text: reply))
-            } catch {
-                messages.append(
-                    AIChatMessage(
-                        role: .assistant,
-                        text: error.localizedDescription
+                for try await delta in client.stream(messages: transcript) {
+                    assembled += delta
+
+                    if let index = assistantIndex {
+                        messages[index].text = assembled
+                    } else {
+                        // First token arrived: drop the "Thinking..." indicator and show the bubble.
+                        isSending = false
+                        messages.append(AIChatMessage(role: .assistant, text: assembled))
+                        assistantIndex = messages.count - 1
+                    }
+                }
+
+                if assistantIndex == nil {
+                    messages.append(
+                        AIChatMessage(role: .assistant, text: "The AI service did not return a message.")
                     )
-                )
+                }
+            } catch {
+                if let index = assistantIndex, !assembled.isEmpty {
+                    // Keep whatever streamed in before the failure.
+                    messages[index].text = assembled
+                } else {
+                    messages.append(AIChatMessage(role: .assistant, text: error.localizedDescription))
+                }
             }
 
             isSending = false
@@ -189,12 +299,16 @@ struct AIChatView: View {
         1. ONLY answer questions about health, medicine, wellness, and biology.
         2. If the user asks about ANYTHING else (e.g. math, coding, general knowledge, movies), you must politely refuse and remind them you are a health companion.
         3. Do NOT lie or invent medical data. Be transparent about your limitations and do not claim to diagnose or prescribe.
-        
+        4. Format your answers in Markdown. Use short paragraphs, **bold** for key points, and bullet or numbered lists for steps.
+
+        Audience:
+        \(audienceGuidance)
+
         Here is the user's current health context from Apple Health and their profile:
         Managing Conditions: \(conditions)
         Today's Health Data:
         \(healthData)
-        
+
         Use this data naturally when answering.
         """
 
@@ -276,10 +390,16 @@ private struct AIMessageBubble: View {
                         .foregroundStyle(isUser ? .white.opacity(0.86) : .secondary)
                 }
 
-                Text(message.text)
-                    .font(.system(size: 16))
-                    .foregroundStyle(isUser ? .white : .primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if isUser {
+                    Text(message.text)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    MarkdownText(text: message.text)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.primary)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
@@ -372,7 +492,7 @@ private struct AIChatMessage: Identifiable {
 
     let id = UUID()
     let role: Role
-    let text: String
+    var text: String
     var attachmentName: String?
 }
 
@@ -461,7 +581,231 @@ private enum AIDocumentError: LocalizedError {
         case .unreadableDocument:
             return "I could not read that document."
         case .unsupportedFile:
-            return "Please attach a PDF, text, JSON, or CSV file for this demo."
+            return "Please attach a PDF, Markdown, text, JSON, or CSV file for this demo."
         }
+    }
+}
+
+// MARK: - Markdown rendering
+
+/// Lightweight Markdown renderer for assistant replies. Handles the subset that
+/// chat models actually emit: headings, bullet/numbered lists, blockquotes,
+/// fenced code, horizontal rules, and inline emphasis. Re-parses cheaply on every
+/// streamed token, so partial Markdown renders gracefully as it arrives.
+private struct MarkdownText: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(MarkdownParser.blocks(from: text).enumerated()), id: \.offset) { _, block in
+                render(block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func render(_ block: MarkdownParser.Block) -> some View {
+        switch block {
+        case .heading(let level, let content):
+            inline(content)
+                .font(.system(size: headingSize(level), weight: .bold))
+                .fixedSize(horizontal: false, vertical: true)
+
+        case .paragraph(let content):
+            inline(content)
+                .fixedSize(horizontal: false, vertical: true)
+
+        case .bullet(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                        inline(item).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+        case .numbered(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(index + 1).").fontWeight(.semibold)
+                        inline(item).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+        case .quote(let content):
+            inline(content)
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.secondary.opacity(0.4))
+                        .frame(width: 3)
+                }
+
+        case .code(let content):
+            Text(content)
+                .font(.system(size: 14, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+        case .rule:
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 1)
+                .padding(.vertical, 2)
+        }
+    }
+
+    /// Renders inline emphasis (**bold**, *italic*, `code`, links) via AttributedString.
+    private func inline(_ string: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: string,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(string)
+    }
+
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: return 22
+        case 2: return 20
+        case 3: return 18
+        default: return 16
+        }
+    }
+}
+
+private enum MarkdownParser {
+    enum Block {
+        case heading(Int, String)
+        case paragraph(String)
+        case bullet([String])
+        case numbered([String])
+        case quote(String)
+        case code(String)
+        case rule
+    }
+
+    static func blocks(from text: String) -> [Block] {
+        var blocks: [Block] = []
+        let lines = text.components(separatedBy: "\n")
+        var paragraph: [String] = []
+        var index = 0
+
+        func flushParagraph() {
+            guard !paragraph.isEmpty else { return }
+            blocks.append(.paragraph(paragraph.joined(separator: " ")))
+            paragraph.removeAll()
+        }
+
+        while index < lines.count {
+            let line = lines[index].trimmingCharacters(in: .whitespaces)
+
+            // Fenced code block
+            if line.hasPrefix("```") {
+                flushParagraph()
+                var code: [String] = []
+                index += 1
+                while index < lines.count, !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    code.append(lines[index])
+                    index += 1
+                }
+                index += 1 // consume closing fence (if present)
+                blocks.append(.code(code.joined(separator: "\n")))
+                continue
+            }
+
+            if line.isEmpty {
+                flushParagraph()
+                index += 1
+                continue
+            }
+
+            if line == "---" || line == "***" || line == "___" {
+                flushParagraph()
+                blocks.append(.rule)
+                index += 1
+                continue
+            }
+
+            if let heading = heading(from: line) {
+                flushParagraph()
+                blocks.append(heading)
+                index += 1
+                continue
+            }
+
+            if isBullet(line) {
+                flushParagraph()
+                var items: [String] = []
+                while index < lines.count {
+                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
+                    guard isBullet(candidate) else { break }
+                    items.append(String(candidate.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+                    index += 1
+                }
+                blocks.append(.bullet(items))
+                continue
+            }
+
+            if isNumbered(line) {
+                flushParagraph()
+                var items: [String] = []
+                while index < lines.count {
+                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
+                    guard isNumbered(candidate) else { break }
+                    items.append(numberedContent(candidate))
+                    index += 1
+                }
+                blocks.append(.numbered(items))
+                continue
+            }
+
+            if line.hasPrefix(">") {
+                flushParagraph()
+                blocks.append(.quote(String(line.dropFirst()).trimmingCharacters(in: .whitespaces)))
+                index += 1
+                continue
+            }
+
+            paragraph.append(line)
+            index += 1
+        }
+
+        flushParagraph()
+        return blocks
+    }
+
+    private static func heading(from line: String) -> Block? {
+        var level = 0
+        for character in line {
+            if character == "#" { level += 1 } else { break }
+        }
+        guard (1...6).contains(level) else { return nil }
+        let rest = line.dropFirst(level)
+        guard rest.first == " " else { return nil }
+        return .heading(level, rest.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func isBullet(_ line: String) -> Bool {
+        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
+    }
+
+    private static func isNumbered(_ line: String) -> Bool {
+        let digits = line.prefix(while: { $0.isNumber })
+        guard !digits.isEmpty else { return false }
+        let after = line.dropFirst(digits.count)
+        return after.hasPrefix(". ") || after.hasPrefix(") ")
+    }
+
+    private static func numberedContent(_ line: String) -> String {
+        let digits = line.prefix(while: { $0.isNumber })
+        return String(line.dropFirst(digits.count + 2)).trimmingCharacters(in: .whitespaces)
     }
 }

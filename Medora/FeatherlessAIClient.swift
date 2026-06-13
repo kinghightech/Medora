@@ -10,7 +10,7 @@ import Foundation
 enum FeatherlessAIConfig {
     static let apiKey = "rc_fac6687b5c8a91cce27b924c01c1712248de446f80bc2f762940f446e3ac85f0"
     static let baseURL = URL(string: "https://api.featherless.ai/v1/chat/completions")!
-    static let model = "meta-llama/Llama-3.2-3B-Instruct"
+    static let model = "Qwen/Qwen3-4B-Instruct-2507"
 }
 
 struct AITranscriptMessage {
@@ -19,42 +19,68 @@ struct AITranscriptMessage {
 }
 
 struct FeatherlessAIClient {
-    func send(messages: [AITranscriptMessage]) async throws -> String {
-        guard !FeatherlessAIConfig.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw FeatherlessAIError.missingAPIKey
+    /// Streams the assistant reply token-by-token as it is generated, so the UI can
+    /// render text the moment it arrives instead of waiting for the full completion.
+    func stream(messages: [AITranscriptMessage]) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard !FeatherlessAIConfig.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw FeatherlessAIError.missingAPIKey
+                    }
+
+                    var request = URLRequest(url: FeatherlessAIConfig.baseURL)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.setValue("Bearer \(FeatherlessAIConfig.apiKey)", forHTTPHeaderField: "Authorization")
+                    request.httpBody = try JSONEncoder().encode(
+                        FeatherlessChatRequest(
+                            model: FeatherlessAIConfig.model,
+                            messages: messages.map { FeatherlessChatMessage(role: $0.role, content: $0.content) },
+                            temperature: 0.4,
+                            maxTokens: 400,
+                            stream: true
+                        )
+                    )
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw FeatherlessAIError.invalidResponse
+                    }
+
+                    guard (200..<300).contains(httpResponse.statusCode) else {
+                        // On error the server returns a single JSON body, not an SSE stream.
+                        var body = Data()
+                        for try await line in bytes.lines {
+                            body.append(Data(line.utf8))
+                        }
+                        let apiError = try? JSONDecoder().decode(FeatherlessErrorResponse.self, from: body)
+                        throw FeatherlessAIError.requestFailed(apiError?.error.message ?? "Request failed with status \(httpResponse.statusCode).")
+                    }
+
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        if payload == "[DONE]" { break }
+
+                        if let data = payload.data(using: .utf8),
+                           let chunk = try? JSONDecoder().decode(FeatherlessStreamChunk.self, from: data),
+                           let delta = chunk.choices.first?.delta.content,
+                           !delta.isEmpty {
+                            continuation.yield(delta)
+                        }
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in task.cancel() }
         }
-
-        var request = URLRequest(url: FeatherlessAIConfig.baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(FeatherlessAIConfig.apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(
-            FeatherlessChatRequest(
-                model: FeatherlessAIConfig.model,
-                messages: messages.map { FeatherlessChatMessage(role: $0.role, content: $0.content) },
-                temperature: 0.4,
-                maxTokens: 900
-            )
-        )
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw FeatherlessAIError.invalidResponse
-        }
-
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let apiError = try? JSONDecoder().decode(FeatherlessErrorResponse.self, from: data)
-            throw FeatherlessAIError.requestFailed(apiError?.error.message ?? "Request failed with status \(httpResponse.statusCode).")
-        }
-
-        let decodedResponse = try JSONDecoder().decode(FeatherlessChatResponse.self, from: data)
-        guard let reply = decodedResponse.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines),
-              !reply.isEmpty else {
-            throw FeatherlessAIError.emptyResponse
-        }
-
-        return reply
     }
 }
 
@@ -63,12 +89,14 @@ private struct FeatherlessChatRequest: Encodable {
     let messages: [FeatherlessChatMessage]
     let temperature: Double
     let maxTokens: Int
+    let stream: Bool
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
         case maxTokens = "max_tokens"
+        case stream
     }
 }
 
@@ -77,11 +105,15 @@ private struct FeatherlessChatMessage: Codable {
     let content: String
 }
 
-private struct FeatherlessChatResponse: Decodable {
+private struct FeatherlessStreamChunk: Decodable {
     let choices: [Choice]
 
     struct Choice: Decodable {
-        let message: FeatherlessChatMessage
+        let delta: Delta
+    }
+
+    struct Delta: Decodable {
+        let content: String?
     }
 }
 

@@ -129,7 +129,7 @@ struct ContentView: View {
     }
 
     private var isAgeValid: Bool {
-        if let age = parsedAge, age > 0 && age < 120 {
+        if let age = parsedAge, age >= 13 && age < 120 {
             return true
         }
         return false
@@ -531,6 +531,14 @@ private struct AgeStep: View {
     @Binding var ageString: String
     @FocusState.Binding var focusedField: OnboardingField?
 
+    /// True once the user has typed an age that is below the 13+ minimum.
+    private var isUnderage: Bool {
+        if let age = Int(ageString.trimmingCharacters(in: .whitespacesAndNewlines)), age > 0, age < 13 {
+            return true
+        }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 28) {
             OnboardingTitle(title: "How old are you?",
@@ -547,7 +555,20 @@ private struct AgeStep: View {
                         ageString = filtered
                     }
                 }
+
+            if isUnderage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("You must be 13 or older to use Medora.")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 4)
+                .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: isUnderage)
     }
 }
 
