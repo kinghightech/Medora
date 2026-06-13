@@ -11,9 +11,11 @@ import SwiftUI
 struct ProfileView: View {
     let userName: String
     let userEmail: String
+    @ObservedObject var reportStore: ReportStore
     var onSignOut: () -> Void = {}
     @ObservedObject private var loc = LocalizationManager.shared
     @State private var showSignOutConfirmation = false
+    @State private var previewingReport: HealthReport?
     @StateObject private var symptomStore = SymptomStore()
 
     private var displayName: String {
@@ -31,6 +33,7 @@ struct ProfileView: View {
                     
                     VStack(spacing: 20) {
                         accountCard
+                        healthReportsCard
                         languageCard
                         symptomJournalCard
                         signOutCard
@@ -46,6 +49,124 @@ struct ProfileView: View {
         }
         .navigationTitle(loc.t("Profile"))
         .navigationBarTitleDisplayMode(.large)
+        .sheet(item: $previewingReport) { report in
+            ReportPreviewSheet(report: report)
+        }
+    }
+
+    // MARK: Health Reports
+
+    private var healthReportsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(loc.t("Health Reports"))
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+
+            if let job = reportStore.activeJob {
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.regular)
+                        .tint(Color.medoraBlue)
+                        .frame(width: 38, height: 38)
+                        .background(Color.medoraBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(loc.t("Generating report…"))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(job.dateRangeText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+                .padding(10)
+                .background(Color.medoraField, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if reportStore.reports.isEmpty {
+                if reportStore.activeJob == nil {
+                    HStack(spacing: 12) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.medoraBlue)
+                            .frame(width: 38, height: 38)
+                            .background(Color.medoraBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                        Text(loc.t("No reports yet. Generate one from the Aura AI tab."))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .background(Color.medoraField, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(reportStore.reports) { report in
+                        reportRow(report)
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .background(Color.medoraSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 16, x: 0, y: 8)
+    }
+
+    private func reportRow(_ report: HealthReport) -> some View {
+        Button {
+            previewingReport = report
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.richtext.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color.medoraBlue)
+                    .frame(width: 38, height: 38)
+                    .background(Color.medoraBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(report.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text("\(report.dateRangeText) · \(formatRelativeTime(report.createdAt))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                ShareLink(item: report.fileURL) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.medoraBlue)
+                        .frame(width: 32, height: 32)
+                        .background(Color.medoraBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    withAnimation { reportStore.deleteReport(report) }
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.red.opacity(0.78))
+                        .frame(width: 32, height: 32)
+                        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(10)
+            .background(Color.medoraField, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Header
@@ -317,10 +438,38 @@ struct ProfileView: View {
     }
 }
 
+// MARK: - Report preview sheet
+
+private struct ReportPreviewSheet: View {
+    let report: HealthReport
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            PDFKitRepresentable(url: report.fileURL)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle(report.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Done") { dismiss() }
+                            .foregroundStyle(Color.medoraBlue)
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        ShareLink(item: report.fileURL) {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundStyle(Color.medoraBlue)
+                        }
+                    }
+                }
+        }
+    }
+}
+
 #if DEBUG && targetEnvironment(simulator)
 #Preview {
     NavigationStack {
-        ProfileView(userName: "Aahish Abbani", userEmail: "aahish@example.com")
+        ProfileView(userName: "Aahish Abbani", userEmail: "aahish@example.com", reportStore: ReportStore())
     }
 }
 #endif

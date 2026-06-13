@@ -13,6 +13,7 @@ struct AIChatView: View {
     @ObservedObject var healthStore: HealthStore
     @ObservedObject var authStore: AuthStore
     @ObservedObject var checklistStore: ChecklistStore
+    @ObservedObject var reportStore: ReportStore
 
     @State private var messages: [AIChatMessage] = [
         AIChatMessage(
@@ -214,7 +215,8 @@ struct AIChatView: View {
                 SummarizeView(
                     healthStore: healthStore,
                     checklistStore: checklistStore,
-                    authStore: authStore
+                    authStore: authStore,
+                    reportStore: reportStore
                 )
             }
         }

@@ -21,7 +21,11 @@ struct AITranscriptMessage {
 struct FeatherlessAIClient {
     /// Streams the assistant reply token-by-token as it is generated, so the UI can
     /// render text the moment it arrives instead of waiting for the full completion.
-    func stream(messages: [AITranscriptMessage]) -> AsyncThrowingStream<String, Error> {
+    ///
+    /// - Parameters:
+    ///   - messages: The conversation transcript to send.
+    ///   - maxTokens: Maximum response tokens (default 2000 for chat; use more for long reports).
+    func stream(messages: [AITranscriptMessage], maxTokens: Int = 2000) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -39,8 +43,11 @@ struct FeatherlessAIClient {
                             model: FeatherlessAIConfig.model,
                             messages: messages.map { FeatherlessChatMessage(role: $0.role, content: $0.content) },
                             temperature: 0.4,
-                            maxTokens: 1000,
-                            stream: true
+                            maxTokens: maxTokens,
+                            stream: true,
+                            // Disable Qwen3's extended "thinking" mode so thinking tokens
+                            // don't eat the response budget or leak <think> tags into the UI.
+                            thinkingBudget: 0
                         )
                     )
 
@@ -60,6 +67,10 @@ struct FeatherlessAIClient {
                         throw FeatherlessAIError.requestFailed(apiError?.error.message ?? "Request failed with status \(httpResponse.statusCode).")
                     }
 
+                    // Buffer used to strip <think>…</think> blocks that Qwen3 may still emit.
+                    var thinkBuffer = ""
+                    var insideThink = false
+
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -69,7 +80,12 @@ struct FeatherlessAIClient {
                            let chunk = try? JSONDecoder().decode(FeatherlessStreamChunk.self, from: data),
                            let delta = chunk.choices.first?.delta.content,
                            !delta.isEmpty {
-                            continuation.yield(delta)
+
+                            // Strip <think>…</think> blocks on the fly.
+                            let cleaned = filterThinkingTokens(delta, buffer: &thinkBuffer, inThink: &insideThink)
+                            if !cleaned.isEmpty {
+                                continuation.yield(cleaned)
+                            }
                         }
                     }
 
@@ -82,7 +98,58 @@ struct FeatherlessAIClient {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    // MARK: - Thinking-token filter
+
+    /// Removes `<think>…</think>` spans that Qwen3 emits during chain-of-thought.
+    /// Called incrementally on each streamed delta; carries mutable state across calls
+    /// via `buffer` and `inThink`.
+    private func filterThinkingTokens(_ delta: String, buffer: inout String, inThink: inout Bool) -> String {
+        buffer += delta
+        var output = ""
+
+        while !buffer.isEmpty {
+            if inThink {
+                // We're inside a think block — consume until we find the closing tag.
+                if let closeRange = buffer.range(of: "</think>") {
+                    buffer.removeSubrange(buffer.startIndex..<closeRange.upperBound)
+                    inThink = false
+                    // Add a single newline after a think block so the visible text flows correctly.
+                    output += "\n"
+                } else {
+                    // Closing tag hasn't arrived yet — keep buffering.
+                    break
+                }
+            } else {
+                // Not inside a think block — look for an opening tag.
+                if let openRange = buffer.range(of: "<think>") {
+                    // Emit everything before the tag.
+                    output += String(buffer[buffer.startIndex..<openRange.lowerBound])
+                    buffer.removeSubrange(buffer.startIndex..<openRange.upperBound)
+                    inThink = true
+                } else if buffer.hasSuffix("<") || buffer.hasSuffix("<t") ||
+                          buffer.hasSuffix("<th") || buffer.hasSuffix("<thi") ||
+                          buffer.hasSuffix("<thin") || buffer.hasSuffix("<think") ||
+                          buffer.hasSuffix("<think>".prefix(buffer.count)) {
+                    // Partial opening tag — hold the buffer in case next delta completes it.
+                    // Emit everything except the potential partial tag.
+                    let safeEnd = buffer.index(buffer.endIndex, offsetBy: -min(buffer.count, 7))
+                    output += String(buffer[buffer.startIndex..<safeEnd])
+                    buffer = String(buffer[safeEnd...])
+                    break
+                } else {
+                    // No think tags anywhere — emit the whole buffer.
+                    output += buffer
+                    buffer = ""
+                }
+            }
+        }
+
+        return output
+    }
 }
+
+// MARK: - Request / Response models
 
 private struct FeatherlessChatRequest: Encodable {
     let model: String
@@ -90,6 +157,9 @@ private struct FeatherlessChatRequest: Encodable {
     let temperature: Double
     let maxTokens: Int
     let stream: Bool
+    /// chat.enable_thinking=false equivalent via extra_body on Featherless.
+    /// Sending budget_tokens=0 disables extended thinking for Qwen3.
+    let thinkingBudget: Int
 
     enum CodingKeys: String, CodingKey {
         case model
@@ -97,6 +167,7 @@ private struct FeatherlessChatRequest: Encodable {
         case temperature
         case maxTokens = "max_tokens"
         case stream
+        case thinkingBudget = "thinking_budget_tokens"
     }
 }
 

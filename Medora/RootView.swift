@@ -10,6 +10,10 @@
 import SwiftUI
 
 struct RootView: View {
+    /// Deep link flag from the widget — when true, the symptom log sheet
+    /// opens automatically.
+    @Binding var shouldOpenSymptomLog: Bool
+
     /// Shared health store so data loaded during onboarding stays available
     /// in the main app.
     @StateObject private var healthStore = HealthStore()
@@ -20,6 +24,10 @@ struct RootView: View {
 
     /// Handles secure account creation through Supabase Auth.
     @StateObject private var authStore = AuthStore()
+
+    /// Owns background health-report generation so it survives leaving the
+    /// Summarize screen and keeps the generated reports across launches.
+    @StateObject private var reportStore = ReportStore()
 
     /// Persisted across launches; empty while onboarding hasn't finished.
     @AppStorage("medora.user.name") private var storedUserName = ""
@@ -40,6 +48,8 @@ struct RootView: View {
                             healthStore: healthStore,
                             checklistStore: checklistStore,
                             authStore: authStore,
+                            reportStore: reportStore,
+                            shouldOpenSymptomLog: $shouldOpenSymptomLog,
                             onSignOut: signOut)
                     .environmentObject(authStore)
                     .transition(.opacity)
@@ -48,6 +58,8 @@ struct RootView: View {
                         // the user connects Apple Health; returning launches
                         // re-query here instead.
                         await healthStore.refreshHealthData()
+                        // Ensure we can deliver the "report ready" notification.
+                        NotificationManager.shared.requestPermission()
                     }
             } else if isRestoringSession {
                 ProgressView()
@@ -117,6 +129,6 @@ struct RootView: View {
 
 #if DEBUG && targetEnvironment(simulator)
 #Preview {
-    RootView()
+    RootView(shouldOpenSymptomLog: .constant(false))
 }
 #endif

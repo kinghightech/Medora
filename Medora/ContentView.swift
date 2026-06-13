@@ -15,6 +15,7 @@ fileprivate enum OnboardingField: Hashable {
     case firstName
     case lastName
     case age
+    case otherCondition
     case email
     case password
     case confirmPassword
@@ -90,9 +91,10 @@ struct ContentView: View {
     private let availableConditions = [
         "Heart Health", "Diabetes", "Cancer", "Asthma",
         "High Blood Pressure", "Recovery After Surgery",
-        "Mental Health", "Chronic Pain", "Autoimmune Condition", "Other"
+        "Mental Health", "Chronic Pain", "Autoimmune Condition"
     ]
     @State private var selectedConditions: Set<String> = []
+    @State private var otherCondition = ""
 
     // Screen 6: Account
     @State private var email = ""
@@ -139,6 +141,22 @@ struct ContentView: View {
         OnboardingValidation.isValidEmail(email)
             && OnboardingValidation.isValidPassword(password)
             && password == confirmPassword
+    }
+
+    private var isManagingValid: Bool {
+        !selectedConditions.contains(ManagingStep.otherOption)
+            || !otherCondition.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var finalManagingConditions: [String] {
+        let selectedStandardConditions = availableConditions.filter { selectedConditions.contains($0) }
+        let customCondition = otherCondition.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if selectedConditions.contains(ManagingStep.otherOption), !customCondition.isEmpty {
+            return selectedStandardConditions + [customCondition]
+        }
+
+        return selectedStandardConditions
     }
 
     private var isCarePartnerValid: Bool {
@@ -204,7 +222,10 @@ struct ContentView: View {
             case .age:
                 AgeStep(ageString: $ageString, focusedField: $focusedField)
             case .managing:
-                ManagingStep(conditions: availableConditions, selected: $selectedConditions)
+                ManagingStep(conditions: availableConditions,
+                             selected: $selectedConditions,
+                             otherCondition: $otherCondition,
+                             focusedField: $focusedField)
             case .healthPermission:
                 HealthPermissionStep()
             case .account:
@@ -255,6 +276,7 @@ struct ContentView: View {
                 primaryButton("Continue") {
                     advanceStep(to: .healthPermission)
                 }
+                .disabled(!isManagingValid)
 
             case .healthPermission:
                 Button(action: requestHealthAccess) {
@@ -373,7 +395,7 @@ struct ContentView: View {
         let finalEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let finalPassword = password
         let finalAge = parsedAge
-        let finalManaging = Array(selectedConditions)
+        let finalManaging = finalManagingConditions
         let finalReminders = wantsReminders ?? false
         let trimmedCpName = cpName.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalCpName = trimmedCpName.isEmpty ? nil : trimmedCpName
@@ -575,8 +597,16 @@ private struct AgeStep: View {
 // MARK: - Screen 4: Managing conditions
 
 private struct ManagingStep: View {
+    static let otherOption = "Other"
+
     let conditions: [String]
     @Binding var selected: Set<String>
+    @Binding var otherCondition: String
+    @FocusState.Binding var focusedField: OnboardingField?
+
+    private var isOtherSelected: Bool {
+        selected.contains(Self.otherOption)
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -595,6 +625,37 @@ private struct ManagingStep: View {
                     }
                 }
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Something else?")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.medoraDeepBlue)
+                    .padding(.leading, 6)
+
+                SelectableRow(title: Self.otherOption,
+                              isSelected: isOtherSelected) {
+                    if isOtherSelected {
+                        selected.remove(Self.otherOption)
+                        otherCondition = ""
+                        focusedField = nil
+                    } else {
+                        selected.insert(Self.otherOption)
+                        focusedField = .otherCondition
+                    }
+                }
+
+                if isOtherSelected {
+                    TextField("Write what you're managing", text: $otherCondition)
+                        .textInputAutocapitalization(.words)
+                        .focused($focusedField, equals: .otherCondition)
+                        .submitLabel(.done)
+                        .onSubmit { focusedField = nil }
+                        .glassStyle(isFocused: focusedField == .otherCondition)
+                        .padding(.horizontal, 4)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isOtherSelected)
 
             Text("Don't worry — you can always update this later.")
                 .font(.system(size: 13, weight: .medium))

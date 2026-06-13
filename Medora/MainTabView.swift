@@ -15,56 +15,152 @@ struct MainTabView: View {
     @ObservedObject var healthStore: HealthStore
     @ObservedObject var checklistStore: ChecklistStore
     @ObservedObject var authStore: AuthStore
+    @ObservedObject var reportStore: ReportStore
+    @Binding var shouldOpenSymptomLog: Bool
     var onSignOut: () -> Void = {}
     @ObservedObject private var loc = LocalizationManager.shared
 
+    @State private var selectedTab = 0
+    private let profileTab = 5
+
     var body: some View {
-        TabView {
-            NavigationStack {
-                HomeView(userName: userName,
-                         checklistStore: checklistStore)
-            }
-            .tabItem {
-                Label(loc.t("Home"), systemImage: "house.fill")
-            }
+        ZStack(alignment: .top) {
+            TabView(selection: $selectedTab) {
+                NavigationStack {
+                    HomeView(userName: userName,
+                             checklistStore: checklistStore,
+                             shouldOpenSymptomLog: $shouldOpenSymptomLog)
+                }
+                .tabItem {
+                    Label(loc.t("Home"), systemImage: "house.fill")
+                }
+                .tag(0)
 
-            NavigationStack {
-                ChecklistView(store: checklistStore, healthStore: healthStore)
-            }
-            .tabItem {
-                Label(loc.t("Checklist"), systemImage: "checklist")
-            }
+                NavigationStack {
+                    ChecklistView(store: checklistStore, healthStore: healthStore)
+                }
+                .tabItem {
+                    Label(loc.t("Checklist"), systemImage: "checklist")
+                }
+                .tag(1)
 
-            NavigationStack {
-                HealthView(healthStore: healthStore)
-            }
-            .tabItem {
-                Label(loc.t("Health"), systemImage: "heart.text.square.fill")
-            }
+                NavigationStack {
+                    HealthView(healthStore: healthStore)
+                }
+                .tabItem {
+                    Label(loc.t("Health"), systemImage: "heart.text.square.fill")
+                }
+                .tag(2)
 
-            NavigationStack {
-                AIChatView(healthStore: healthStore, authStore: authStore, checklistStore: checklistStore)
-                    .navigationTitle(loc.t("Aura AI"))
-            }
-            .tabItem {
-                Label(loc.t("Aura AI"), systemImage: "sparkles")
-            }
+                NavigationStack {
+                    AIChatView(healthStore: healthStore,
+                               authStore: authStore,
+                               checklistStore: checklistStore,
+                               reportStore: reportStore)
+                        .navigationTitle(loc.t("Aura AI"))
+                }
+                .tabItem {
+                    Label(loc.t("Aura AI"), systemImage: "sparkles")
+                }
+                .tag(3)
 
-            NavigationStack {
-                ClinicalTrialsView()
-            }
-            .tabItem {
-                Label(loc.t("Trials"), systemImage: "cross.case.fill")
-            }
+                NavigationStack {
+                    ClinicalTrialsView()
+                }
+                .tabItem {
+                    Label(loc.t("Trials"), systemImage: "cross.case.fill")
+                }
+                .tag(4)
 
-            NavigationStack {
-                ProfileView(userName: userName, userEmail: userEmail, onSignOut: onSignOut)
+                NavigationStack {
+                    ProfileView(userName: userName,
+                                userEmail: userEmail,
+                                reportStore: reportStore,
+                                onSignOut: onSignOut)
+                }
+                .tabItem {
+                    Label(loc.t("Profile"), systemImage: "person.crop.circle.fill")
+                }
+                .tag(profileTab)
             }
-            .tabItem {
-                Label(loc.t("Profile"), systemImage: "person.crop.circle.fill")
+            .tint(Color.medoraBlue)
+
+            if let report = reportStore.lastCompleted {
+                ReportReadyBanner(report: report) {
+                    selectedTab = profileTab
+                    withAnimation { reportStore.lastCompleted = nil }
+                } onDismiss: {
+                    withAnimation { reportStore.lastCompleted = nil }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(1)
             }
         }
-        .tint(Color.medoraBlue)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: reportStore.lastCompleted)
+        // Auto-dismiss the banner after a few seconds.
+        .task(id: reportStore.lastCompleted?.id) {
+            guard reportStore.lastCompleted != nil else { return }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            withAnimation { reportStore.lastCompleted = nil }
+        }
+        // Tapping a "report ready" notification routes here.
+        .onReceive(NotificationCenter.default.publisher(for: .medoraOpenReports)) { _ in
+            selectedTab = profileTab
+            withAnimation { reportStore.lastCompleted = nil }
+        }
+    }
+}
+
+// MARK: - In-app "report ready" banner
+
+private struct ReportReadyBanner: View {
+    let report: HealthReport
+    var onTap: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Report ready")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                Text("Tap to view it on your Profile")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+
+            Spacer(minLength: 8)
+
+            // Standalone button so the X doesn't also trigger the row tap.
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(
+                colors: [Color.medoraBlue, Color(red: 0.38, green: 0.2, blue: 0.9)],
+                startPoint: .leading,
+                endPoint: .trailing
+            ),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .shadow(color: Color.medoraBlue.opacity(0.35), radius: 14, x: 0, y: 8)
+        // Row-level tap so it doesn't nest with the dismiss button.
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture(perform: onTap)
     }
 }
 
@@ -75,6 +171,7 @@ struct MainTabView: View {
 private struct HomeView: View {
     let userName: String
     @ObservedObject var checklistStore: ChecklistStore
+    @Binding var shouldOpenSymptomLog: Bool
     @ObservedObject private var loc = LocalizationManager.shared
 
     private let today = Date()
@@ -109,6 +206,12 @@ private struct HomeView: View {
         .sheet(isPresented: $isShowingSymptomLog) {
             NavigationStack {
                 SymptomLogView()
+            }
+        }
+        .onChange(of: shouldOpenSymptomLog) { newValue in
+            if newValue {
+                isShowingSymptomLog = true
+                shouldOpenSymptomLog = false
             }
         }
     }
@@ -256,6 +359,8 @@ private struct HomeView: View {
                 userEmail: "alex@example.com",
                 healthStore: HealthStore(),
                 checklistStore: ChecklistStore(),
-                authStore: AuthStore())
+                authStore: AuthStore(),
+                reportStore: ReportStore(),
+                shouldOpenSymptomLog: .constant(false))
 }
 #endif

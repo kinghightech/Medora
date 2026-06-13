@@ -9,10 +9,19 @@ import SwiftUI
 
 @main
 struct MedoraApp: App {
+    /// When the widget is tapped, it opens `medora://log-symptom` which
+    /// sets this flag so the symptom journal sheet opens automatically.
+    @State private var shouldOpenSymptomLog = false
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(shouldOpenSymptomLog: $shouldOpenSymptomLog)
                 .preferredColorScheme(.light)
+                .onOpenURL { url in
+                    if url.scheme == "medora" && url.host == "log-symptom" {
+                        shouldOpenSymptomLog = true
+                    }
+                }
         }
     }
 }
