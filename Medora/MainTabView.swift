@@ -22,7 +22,6 @@ struct MainTabView: View {
         TabView {
             NavigationStack {
                 HomeView(userName: userName,
-                         healthStore: healthStore,
                          checklistStore: checklistStore)
             }
             .tabItem {
@@ -37,7 +36,14 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                AIChatView(healthStore: healthStore, authStore: authStore)
+                HealthView(healthStore: healthStore)
+            }
+            .tabItem {
+                Label(loc.t("Health"), systemImage: "heart.text.square.fill")
+            }
+
+            NavigationStack {
+                AIChatView(healthStore: healthStore, authStore: authStore, checklistStore: checklistStore)
                     .navigationTitle(loc.t("Aura AI"))
             }
             .tabItem {
@@ -68,7 +74,6 @@ struct MainTabView: View {
 /// checklist tasks at a glance.
 private struct HomeView: View {
     let userName: String
-    @ObservedObject var healthStore: HealthStore
     @ObservedObject var checklistStore: ChecklistStore
     @ObservedObject private var loc = LocalizationManager.shared
 
@@ -78,11 +83,6 @@ private struct HomeView: View {
     private var greeting: String {
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? loc.t("Welcome back") : "\(loc.t("Welcome")), \(trimmed)"
-    }
-
-    /// Translates the "No data available" placeholder; leaves real values as-is.
-    private func metricValue(_ value: String) -> String {
-        value == "No data available" ? loc.t("No data available") : value
     }
 
     private var todaysTasks: [ChecklistTask] {
@@ -96,7 +96,6 @@ private struct HomeView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    healthCard
                     symptomsCard
                     tasksCard
                 }
@@ -135,113 +134,6 @@ private struct HomeView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, MMMM d"
         return formatter.string(from: today)
-    }
-
-    // MARK: Health
-
-    private var pillCompliance: String {
-        let tasks = todaysTasks
-        let pillTasks = tasks.filter { task in
-            let title = task.title.lowercased()
-            return title.contains("pill") || title.contains("med") || title.contains("tablet") || title.contains("capsule") || title.contains("dose") || title.contains("medication")
-        }
-        guard !pillTasks.isEmpty else {
-            return loc.t("No pills scheduled")
-        }
-        let completed = pillTasks.filter(\.isDone).count
-        return "\(completed) \(loc.t("of")) \(pillTasks.count) \(loc.t("taken"))"
-    }
-
-    private var healthCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(loc.t("Today's Health"))
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
-
-                Spacer()
-
-                Button(action: refreshHealthData) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.medoraBlue)
-                        .frame(width: 36, height: 36)
-                        .background(Color.medoraBlue.opacity(0.12), in: Circle())
-                        .opacity(healthStore.isLoading ? 0 : 1)
-                        .overlay {
-                            if healthStore.isLoading {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .disabled(healthStore.isLoading)
-                .accessibilityLabel("Refresh health data")
-            }
-
-            HealthMetricBox(
-                title: loc.t("Calories burned"),
-                value: metricValue(healthStore.summary.caloriesBurned),
-                systemImage: "flame.fill",
-                tint: Color(red: 0.88, green: 0.27, blue: 0.14)
-            )
-
-            HealthMetricBox(
-                title: loc.t("Steps"),
-                value: metricValue(healthStore.summary.steps),
-                systemImage: "figure.walk",
-                tint: Color.medoraBlue
-            )
-
-            HealthMetricBox(
-                title: loc.t("Sleep data"),
-                value: metricValue(healthStore.summary.sleep),
-                systemImage: "moon.zzz.fill",
-                tint: Color(red: 0.32, green: 0.28, blue: 0.68)
-            )
-
-            HealthMetricBox(
-                title: loc.t("Heart Rate"),
-                value: metricValue(healthStore.summary.heartRate),
-                systemImage: "heart.fill",
-                tint: Color(red: 0.94, green: 0.21, blue: 0.26)
-            )
-
-            HealthMetricBox(
-                title: loc.t("Blood Pressure"),
-                value: metricValue(healthStore.summary.bloodPressure),
-                systemImage: "heart.text.square.fill",
-                tint: Color(red: 0.05, green: 0.72, blue: 0.61)
-            )
-
-            HealthMetricBox(
-                title: loc.t("Blood Glucose"),
-                value: metricValue(healthStore.summary.bloodGlucose),
-                systemImage: "water.waves",
-                tint: Color(red: 0.92, green: 0.49, blue: 0.19)
-            )
-
-            HealthMetricBox(
-                title: loc.t("Medications"),
-                value: pillCompliance,
-                systemImage: "pills.fill",
-                tint: Color(red: 0.52, green: 0.28, blue: 0.88)
-            )
-        }
-        .padding(18)
-        .background(Color.medoraSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 16, x: 0, y: 8)
-    }
-
-    private func refreshHealthData() {
-        Task {
-            // Request authorization as well as re-querying: if read access was
-            // never granted (skipped/denied during onboarding), a plain refresh
-            // would silently return "No data available" forever. Re-requesting
-            // prompts the user when the status is still undetermined, then loads.
-            _ = await healthStore.requestAccessAndLoadData()
-        }
     }
 
     // MARK: Today's tasks

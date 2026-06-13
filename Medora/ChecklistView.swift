@@ -10,6 +10,7 @@
 import SwiftUI
 import Combine
 import UserNotifications
+import EventKit
 
 // MARK: - Model
 
@@ -294,6 +295,11 @@ struct ChecklistView: View {
     @State private var isSyncing = false
     @FocusState private var isAddFieldFocused: Bool
 
+    // Calendar export state
+    @State private var isShowingExportSheet = false
+    @State private var isExporting = false
+    @State private var exportToast: ExportToast? = nil
+
     private let calendar = Calendar.current
 
     private var selectedTasks: [ChecklistTask] {
@@ -375,6 +381,10 @@ struct ChecklistView: View {
                     if HKHealthStore.isHealthDataAvailable() {
                         healthSyncBanner
                     }
+
+                    if !selectedTasks.isEmpty {
+                        calendarExportBanner
+                    }
                     
                     HStack {
                         categoryTabs
@@ -390,11 +400,31 @@ struct ChecklistView: View {
             }
             
             fabButton
+
+            // Export toast overlay
+            if let toast = exportToast {
+                VStack {
+                    Spacer()
+                    ExportToastView(toast: toast)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 90)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
         }
         .navigationTitle(loc.t("Checklist"))
         .navigationBarTitleDisplayMode(.large)
         .sheet(isPresented: $isShowingAddSheet) {
             AddChecklistItemSheet(store: store, selectedDate: selectedDate)
+        }
+        .sheet(isPresented: $isShowingExportSheet) {
+            CalendarExportSheet(
+                tasks: selectedTasks,
+                date: selectedDate,
+                isExporting: $isExporting
+            ) { result in
+                handleExportResult(result)
+            }
         }
         .task {
             if HKHealthStore.isHealthDataAvailable() {
@@ -530,6 +560,87 @@ struct ChecklistView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE"
         return formatter.string(from: date).uppercased()
+    }
+
+    // MARK: Export result handler
+
+    private func handleExportResult(_ result: CalendarExportResult) {
+        switch result {
+        case .success(let count):
+            HapticManager.shared.triggerNotification(type: .success)
+            showToast(.success("\(count) event\(count == 1 ? "" : "s") added to Apple Calendar ✓"))
+        case .permissionDenied:
+            HapticManager.shared.triggerNotification(type: .error)
+            showToast(.error("Calendar access denied. Enable in Settings."))
+        case .partialSuccess(let count, _):
+            HapticManager.shared.triggerNotification(type: .warning)
+            showToast(.success("\(count) event\(count == 1 ? "" : "s") added (some failed)."))
+        case .failure:
+            HapticManager.shared.triggerNotification(type: .error)
+            showToast(.error("Export failed. Please try again."))
+        }
+    }
+
+    private func showToast(_ toast: ExportToast) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            exportToast = toast
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                exportToast = nil
+            }
+        }
+    }
+
+    // MARK: Apple Calendar export banner
+
+    private var calendarExportBanner: some View {
+        Button {
+            HapticManager.shared.triggerSelection()
+            isShowingExportSheet = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.plus")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(hex: "#FF6B6B") ?? .red, Color(hex: "#FF8E53") ?? .orange],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: Circle()
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(loc.t("Send to Apple Calendar"))
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.medoraDeepBlue)
+                    Text(loc.t("Export today's checklist as calendar events."))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if isExporting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.medoraBlue.opacity(0.5))
+                }
+            }
+            .padding(12)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.medoraHairline, lineWidth: 1.2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Health sync banner
@@ -1184,7 +1295,226 @@ struct AddChecklistItemSheet: View {
     }
 }
 
+// MARK: - Calendar Export Sheet
+
+struct CalendarExportSheet: View {
+    let tasks: [ChecklistTask]
+    let date: Date
+    @Binding var isExporting: Bool
+    let onResult: (CalendarExportResult) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var loc = LocalizationManager.shared
+    @State private var localExporting = false
+
+    private var dateString: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        return formatter.string(from: date)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.medoraBackground.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 24) {
+
+                        // Header illustration
+                        VStack(spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color(hex: "#FF6B6B") ?? .red, Color(hex: "#FF8E53") ?? .orange],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 72, height: 72)
+
+                                Image(systemName: "calendar.badge.plus")
+                                    .font(.system(size: 32, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            }
+
+                            Text(loc.t("Export to Apple Calendar"))
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.medoraDeepBlue)
+
+                            Text(dateString)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 8)
+
+                        // Task preview list
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(loc.t("Tasks to export (\(tasks.count))"))
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.medoraDeepBlue)
+                                .padding(.horizontal, 4)
+
+                            VStack(spacing: 8) {
+                                ForEach(tasks) { task in
+                                    HStack(spacing: 12) {
+                                        if task.isPill == true {
+                                            Text("💊")
+                                                .font(.system(size: 18))
+                                        } else {
+                                            Text("✅")
+                                                .font(.system(size: 18))
+                                        }
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(task.title)
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(Color.medoraDeepBlue)
+
+                                            if let time = task.timeOfDay ?? (task.isPill == true ? "Morning" : nil) {
+                                                Text(timeLabel(for: time))
+                                                    .font(.system(size: 11))
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+
+                                        Spacer()
+                                    }
+                                    .padding(12)
+                                    .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(Color.medoraHairline, lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 2)
+
+                        // Info note
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(Color.medoraBlue)
+                            Text(loc.t("Each task will be added as a 30-minute event with a 10-minute reminder."))
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(Color.medoraBlue.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+
+                        // Action buttons
+                        VStack(spacing: 12) {
+                            Button {
+                                Task {
+                                    localExporting = true
+                                    isExporting = true
+                                    let result = await CalendarExportManager.shared.exportTasks(tasks, on: date)
+                                    isExporting = false
+                                    localExporting = false
+                                    dismiss()
+                                    onResult(result)
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if localExporting {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(.white)
+                                    } else {
+                                        Image(systemName: "calendar.badge.plus")
+                                    }
+                                    Text(localExporting ? loc.t("Exporting…") : loc.t("Export to Calendar"))
+                                        .font(.system(size: 16, weight: .bold))
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .disabled(localExporting)
+
+                            Button {
+                                dismiss()
+                            } label: {
+                                Text(loc.t("Cancel"))
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(Color.medoraDeepBlue)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(Color.medoraField, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(localExporting)
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func timeLabel(for timeOfDay: String) -> String {
+        switch timeOfDay.lowercased() {
+        case "morning":          return "8:00 AM – 8:30 AM"
+        case "afternoon":        return "1:00 PM – 1:30 PM"
+        case "evening":          return "6:00 PM – 6:30 PM"
+        case "night", "bedtime": return "9:00 PM – 9:30 PM"
+        default:                 return "\(timeOfDay) (30 min)"
+        }
+    }
+}
+
+// MARK: - Export Toast
+
+enum ExportToast: Equatable {
+    case success(String)
+    case error(String)
+
+    var message: String {
+        switch self {
+        case .success(let msg), .error(let msg): return msg
+        }
+    }
+
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
+    }
+}
+
+struct ExportToastView: View {
+    let toast: ExportToast
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: toast.isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(toast.isSuccess ? Color.medoraGreen : .red)
+
+            Text(toast.message)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.medoraDeepBlue)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.10), radius: 16, x: 0, y: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(toast.isSuccess ? Color.medoraGreen.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1.5)
+        )
+    }
+}
+
 // MARK: - Color Hex Extension
+
 
 extension Color {
     init?(hex: String) {

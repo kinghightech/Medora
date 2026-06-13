@@ -18,6 +18,48 @@ struct HealthDataSummary {
     var bloodGlucose = "No data available"
 }
 
+/// One day's rolled-up metrics for trend analysis.
+struct HealthDailyPoint {
+    let date: Date
+    let steps: Double?
+    let caloriesBurned: Double?
+    let sleepHours: Double?
+    let heartRate: Double?
+}
+
+/// 30-day (or fewer) rolling history fetched alongside today's summary.
+struct HealthDataHistory {
+    var days: [HealthDailyPoint] = []
+
+    /// True when no history could be fetched (HealthKit unavailable / no data).
+    var isEmpty: Bool { days.isEmpty }
+
+    /// Average steps over the history window, or nil if no data.
+    var averageSteps: Double? {
+        let vals = days.compactMap(\.steps)
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    var averageCalories: Double? {
+        let vals = days.compactMap(\.caloriesBurned)
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    var averageSleepHours: Double? {
+        let vals = days.compactMap(\.sleepHours)
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    var averageHeartRate: Double? {
+        let vals = days.compactMap(\.heartRate)
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+}
+
 struct ApplePill: Identifiable, Equatable {
     let id: String
     let name: String
@@ -27,7 +69,32 @@ struct ApplePill: Identifiable, Equatable {
 @MainActor
 final class HealthStore: ObservableObject {
     @Published private(set) var summary = HealthDataSummary()
+    @Published private(set) var history = HealthDataHistory()
     @Published private(set) var isLoading = false
+
+    /// Compact human-readable block of 30-day trend data for injecting into the AI system prompt.
+    var thirtyDaySummaryText: String {
+        guard !history.isEmpty else {
+            return "No 30-day history available."
+        }
+        let fmt = { (v: Double?) -> String in
+            guard let v else { return "N/A" }
+            return String(Int(v.rounded()))
+        }
+        let sleepFmt = { (v: Double?) -> String in
+            guard let v else { return "N/A" }
+            let h = Int(v)
+            let m = Int((v - Double(h)) * 60)
+            return m > 0 ? "\(h)h \(m)m" : "\(h)h"
+        }
+        return """
+        30-Day Averages (\(history.days.count) days of data):
+        • Steps/day: \(fmt(history.averageSteps))
+        • Calories/day: \(fmt(history.averageCalories)) kcal
+        • Sleep/night: \(sleepFmt(history.averageSleepHours))
+        • Heart Rate: \(fmt(history.averageHeartRate)) bpm avg
+        """
+    }
 
     private let calendar = Calendar.current
     private let noDataText = "No data available"
@@ -197,6 +264,159 @@ final class HealthStore: ObservableObject {
             bloodPressure: formatBloodPressure(sys: bpSys, dia: bpDia),
             bloodGlucose: formatBloodGlucose(glucoseValue)
         )
+
+        // Load 30-day rolling history for AI trend context (best-effort; never blocks today's display).
+        await loadHealthHistory(days: 30, context: context, endDate: now)
+    }
+
+    /// Builds a per-day rolling history using `HKStatisticsCollectionQuery` for cumulative metrics
+    /// and a day-by-day approach for sampled vitals/sleep.
+    private func loadHealthHistory(days: Int, context: HealthContext, endDate: Date) async {
+        let historyStart = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
+
+        // --- Cumulative: Steps & Calories ---
+        let stepsHistory = await fetchDailyTotals(
+            store: context.store, type: context.stepType,
+            unit: .count(), start: historyStart, end: endDate
+        )
+        let caloriesHistory = await fetchDailyTotals(
+            store: context.store, type: context.calorieType,
+            unit: .kilocalorie(), start: historyStart, end: endDate
+        )
+
+        // --- Sleep per night (sampled) ---
+        let sleepHistory = await fetchDailySleep(
+            store: context.store, type: context.sleepType,
+            start: historyStart, end: endDate
+        )
+
+        // --- Heart rate: one reading per day ---
+        let hrHistory = await fetchDailyMostRecent(
+            store: context.store, type: context.heartRateType,
+            unit: HKUnit(from: "count/min"), start: historyStart, end: endDate
+        )
+
+        // Merge all day buckets into HealthDailyPoint array.
+        var allDates = Set<Date>()
+        stepsHistory.keys.forEach { allDates.insert($0) }
+        caloriesHistory.keys.forEach { allDates.insert($0) }
+        sleepHistory.keys.forEach { allDates.insert($0) }
+        hrHistory.keys.forEach { allDates.insert($0) }
+
+        let points = allDates.sorted().map { date in
+            HealthDailyPoint(
+                date: date,
+                steps: stepsHistory[date],
+                caloriesBurned: caloriesHistory[date],
+                sleepHours: sleepHistory[date],
+                heartRate: hrHistory[date]
+            )
+        }
+
+        history = HealthDataHistory(days: points)
+    }
+
+    /// Returns a [dayStart: total] map for a cumulative quantity type over a date range.
+    private func fetchDailyTotals(
+        store: HKHealthStore,
+        type: HKQuantityType,
+        unit: HKUnit,
+        start: Date,
+        end: Date
+    ) async -> [Date: Double] {
+        let interval = DateComponents(day: 1)
+        let anchorDate = calendar.startOfDay(for: start)
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum,
+                anchorDate: anchorDate,
+                intervalComponents: interval
+            )
+            query.initialResultsHandler = { _, collection, _ in
+                var result: [Date: Double] = [:]
+                collection?.enumerateStatistics(from: start, to: end) { stats, _ in
+                    if let sum = stats.sumQuantity()?.doubleValue(for: unit) {
+                        result[stats.startDate] = sum
+                    }
+                }
+                continuation.resume(returning: result)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Returns a [dayStart: sleepHours] map by summing asleep samples per calendar day.
+    private func fetchDailySleep(
+        store: HKHealthStore,
+        type: HKCategoryType,
+        start: Date,
+        end: Date
+    ) async -> [Date: Double] {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDesc]
+            ) { [self] _, samples, _ in
+                guard let sleepSamples = samples as? [HKCategorySample] else {
+                    continuation.resume(returning: [:])
+                    return
+                }
+                var result: [Date: Double] = [:]
+                for sample in sleepSamples {
+                    guard Self.asleepValues.contains(sample.value) else { continue }
+                    let day = self.calendar.startOfDay(for: sample.startDate)
+                    let duration = sample.endDate.timeIntervalSince(sample.startDate) / 3600.0
+                    result[day, default: 0] += duration
+                }
+                continuation.resume(returning: result)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Returns a [dayStart: mostRecentValue] map for a sampled quantity type.
+    private func fetchDailyMostRecent(
+        store: HKHealthStore,
+        type: HKQuantityType,
+        unit: HKUnit,
+        start: Date,
+        end: Date
+    ) async -> [Date: Double] {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: [sortDesc]
+            ) { [self] _, samples, _ in
+                guard let quantitySamples = samples as? [HKQuantitySample] else {
+                    continuation.resume(returning: [:])
+                    return
+                }
+                var result: [Date: Double] = [:]
+                for sample in quantitySamples {
+                    let day = self.calendar.startOfDay(for: sample.startDate)
+                    // Only keep the most-recent reading per day (array is sorted descending).
+                    if result[day] == nil {
+                        result[day] = sample.quantity.doubleValue(for: unit)
+                    }
+                }
+                continuation.resume(returning: result)
+            }
+            store.execute(query)
+        }
     }
 
     /// Today's total for a metric, distinguishing "zero so far today" from

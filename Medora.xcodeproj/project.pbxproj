@@ -270,6 +270,7 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, sleep, and medications to show your health summary and sync your pill schedule.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Medora does not write health data, but this permission text is included to keep Apple Health authorization fully configured.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Medora uses your location to find clinical trials near you.";
@@ -314,6 +315,7 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Medora reads your Apple Health steps, active calories, sleep, and medications to show your health summary and sync your pill schedule.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Medora does not write health data, but this permission text is included to keep Apple Health authorization fully configured.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Medora uses your location to find clinical trials near you.";

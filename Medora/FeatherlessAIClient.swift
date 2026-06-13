@@ -39,7 +39,7 @@ struct FeatherlessAIClient {
                             model: FeatherlessAIConfig.model,
                             messages: messages.map { FeatherlessChatMessage(role: $0.role, content: $0.content) },
                             temperature: 0.4,
-                            maxTokens: 400,
+                            maxTokens: 1000,
                             stream: true
                         )
                     )
