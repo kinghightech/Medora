@@ -1,73 +1,69 @@
 # Medora
 
+Medora is an iOS app I built to help people keep their health stuff in one place. The app brings together care plans, Apple Health data, daily tasks, symptom logging, clinical trial search, and an AI assistant called Aura.
 
-Medora is a SwiftUI iOS health app designed to help users manage their care plan in one place. It combines onboarding, Apple Health tracking, daily tasks, symptom logging, clinical trial discovery, and an AI assistant for health-related support.
+The main idea was to make something that feels simple to use, especially for someone managing a condition or trying to stay on top of their care.
 
 ## Features
 
-- **Guided onboarding** to collect user details, health goals, medication reminders, and optional care partner info
-- **Apple Health integration** for tracking health metrics like steps, calories, sleep, heart rate, blood pressure, and blood glucose
-- **Daily checklist** for recurring tasks and care actions
-- **Symptom logging** with a dedicated journal flow and widget deep link support
-- **Clinical trials search** powered by ClinicalTrials.gov
-- **AI assistant** for health-related guidance and support
-- **Localization support** for multiple languages
-- **Profile and report views** for managing account info and health summaries
+* Onboarding for basic info, health goals, medications, and optional care partner details
+* Apple Health support for things like steps, calories, sleep, heart rate, blood pressure, and blood glucose
+* Daily checklist for reminders, routines, and care tasks
+* Symptom log with a journal-style flow
+* Widget deep link for quickly opening the symptom logger
+* Clinical trial search using ClinicalTrials.gov
+* Aura AI assistant for health-related questions and support
+* Profile and report pages for account info and health summaries
+* Localization support for multiple languages
 
 ## Screens
 
-- Welcome / onboarding
-- Home dashboard
-- Checklist
-- Health
-- Aura AI
-- Clinical Trials
-- Profile
+* Welcome / onboarding
+* Home dashboard
+* Checklist
+* Health
+* Aura AI
+* Clinical Trials
+* Profile
 
 ## Tech Stack
 
-- **Swift**
-- **SwiftUI**
-- **HealthKit**
-- **WidgetKit**
-- **Supabase**
-- **ClinicalTrials.gov API**
-- **Featherless AI API**
+* Swift
+* SwiftUI
+* HealthKit
+* WidgetKit
+* Supabase
+* ClinicalTrials.gov API
+* Featherless AI API
 
-## App Flow
+## How It Works
 
-1. User opens Medora
-2. Onboarding collects:
-   - name
-   - age
-   - conditions being managed
-   - Apple Health access
-   - account details
-   - medication reminders
-   - optional care partner info
-3. After setup, the app opens into the main tab view
-4. Users can track health data, manage tasks, log symptoms, chat with Aura AI, and browse clinical trials
+When a user first opens Medora, they go through onboarding. This collects basic details like their name, age, conditions they are managing, Apple Health permissions, account info, medication reminders, and optional care partner information.
+
+After onboarding, the app opens into the main tab view. From there, users can check their health data, manage daily tasks, log symptoms, talk with Aura, and look through clinical trials.
 
 ## Widget Support
 
-Medora includes a widget extension that supports a deep link for opening the symptom log:
+Medora includes a widget extension that can open the symptom log directly with this deep link:
 
-- `medora://log-symptom`
+```text
+medora://log-symptom
+```
 
 ## Requirements
 
-- Xcode
-- iOS device or simulator with HealthKit support
-- Supabase account/configuration
-- Featherless AI API access
+* Xcode
+* iOS device or simulator with HealthKit support
+* Supabase project/configuration
+* Featherless AI API access
 
-> Note: HealthKit works best on a physical device or a simulator with seeded health data.
+HealthKit works best on a real iPhone, but a simulator can work too if it has seeded health data.
 
 ## Setup
 
-1. Clone the repository
+1. Clone the repo
 2. Open `Medora.xcodeproj` in Xcode
-3. Configure any required API keys or backend credentials
+3. Add the needed API keys and backend config
 4. Build and run the app
 
 ## Build
@@ -78,21 +74,13 @@ xcodebuild -scheme Medora -configuration Debug build
 
 ## Notes
 
-- The app uses a light color scheme by default
-- Health permissions are requested during onboarding, but users can continue even if access is denied
-- Some credentials are currently hardcoded in the codebase and should be moved to secure configuration for production use
+* The app uses a light color scheme by default
+* Health permissions are asked for during onboarding, but users can still continue if they deny access
+* Some credentials are still hardcoded right now, so they should definetly be moved into secure config before production
+* This is still a work in progress, so some parts may need cleanup or refinning
 
-## License
+## License / Credit
 
-Aahish Abbani (I) made most of it but used much help from AI to build the UI
+Made by Aahish Abbani.
 
----
-
-If you want, I can next turn this into a **more polished GitHub README** with:
-- a stronger project description
-- installation steps
-- screenshots section
-- environment/configuration section
-- “How it works” section
-
-Or I can **write the README directly into the repo** for you.
+I built most of the app myself, but used AI for help with parts of the UI, structure, and debugging.
