@@ -84,7 +84,7 @@ xcodebuild -scheme Medora -configuration Debug build
 
 ## License
 
-Add your license here.
+Aahish Abbani (I) made most of it but used much help from AI to build the UI
 
 ---
 
